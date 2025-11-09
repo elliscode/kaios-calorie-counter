@@ -1,4 +1,4 @@
-# Chess with humans
+# KaiOS Calorie Counter
 
 Making a calorie counting app for KaiOS, similar to other free offerings. Havne't gotten anything off the ground yet, but this is where it will go when I do.
 
