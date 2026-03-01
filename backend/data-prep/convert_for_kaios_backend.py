@@ -1,6 +1,7 @@
 import os
 import re
 import json
+from datetime import datetime
 
 import json_stream
 from json_stream_to_standard_types import to_standard_types
@@ -216,20 +217,22 @@ def is_portion_stupid(input_text):
     return False
 
 def parse_skip_servings_file(file_path: str):
-    output = set()
+    output = []
     if not os.path.exists(file_path):
         return output
     with open(file_path, 'r') as f:
         line = f.readline()
         while line != "":
-            output.add(line.strip())
+            content = line.strip()
+            if content not in output:
+                output.append(content)
             line = f.readline()
     return output
 
-def write_skip_file(file_path: str, items: set):
+def write_skip_file(file_path: str, items: list):
     with open(file_path, 'w') as f:
-        for item in items:
-            f.write(f"{item}\n")
+        for thing in items:
+            f.write(f"{thing}\n")
 
 def parse_replacement_servings_file(file_path: str):
     output = {}
@@ -406,7 +409,8 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
             for key, value in brand_fixes.items():
                 if key in name:
                     name = name.replace(key, value)
-            json_line = json.dumps({'name': name, 'servings': servings, 'upc': upc})
+            date_value = datetime.strptime(item['publicationDate'], "%m/%d/%Y")
+            json_line = json.dumps({'name': name, 'upc': upc, 'date': date_value.date().isoformat(), 'servings': servings})
             output_file.write(json_line + "\n")
             upc_file.write(f"{upc}\t{name}\n")
             count = count + 1
