@@ -1,0 +1,22 @@
+[project]
+name = "kaios-calorie-counter-data-prep"
+version = "1.0.0"
+description = ""
+requires-python = ">=3.14"
+dependencies = [
+    "boto3",
+    "json-stream",
+    "json-stream-to-standard-types",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
+
+
+[tool.black]
+line-length = 120

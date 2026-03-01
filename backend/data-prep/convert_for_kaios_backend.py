@@ -4,83 +4,40 @@ import json
 
 import json_stream
 from json_stream_to_standard_types import to_standard_types
-import tkinter as tk
-from tkinter import messagebox
 
-def show_override_gui(p: str, upc: str) -> tuple[str, str]:
-    result = {"q": None, "unit": None}
+def show_override_console(p: str, upc: str, item: dict) -> tuple[str, str]:
+    """
+    Console-based replacement for GUI input.
+    Prompts for quantity (q) and unit for a given part `p` and UPC `upc`.
+    """
 
-    def on_ok(*args):
+    print(f"Item: {json.dumps(item, indent=2)}")
+    print(f"{p} -- {upc}")
+
+    while True:
+        q_input = input("Enter Quantity (q) or leave empty to skip: ").strip()
+        if not q_input.strip():
+            print("Skipping entry.")
+            return None, None
         try:
-            q_value = eval(q_entry.get().strip())
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Quantity must be a number.")
-            return
-        unit_value = unit_entry.get().strip()
+            # Evaluate input to handle numbers like '1.0' or '1/2'
+            q_value = eval(q_input)
+            q_value = str(q_value)
+        except Exception:
+            print("Invalid input. Quantity must be a number.")
+            continue
+
+        unit_value = input("Enter Unit: ").strip()
         if not unit_value:
-            messagebox.showerror("Invalid Input", "Unit cannot be empty.")
-            return
-        result["q"] = str(q_value)
-        result["unit"] = unit_value
-        root.destroy()
+            print("Unit cannot be empty. Try again.")
+            continue
 
-    def on_skip():
-        result["q"] = None
-        result["unit"] = None
-        root.destroy()
-
-    root = tk.Tk()
-    root.title("Override Input")
-
-    # Part 1: Show provided string `p`
-    text_p = tk.Text(root, wrap="word", height=5, width=40)
-    text_p.insert("1.0", f"{p} -- {upc}")
-    text_p.config(state="disabled")  # read-only
-    text_p.pack(padx=10, pady=10, fill="both", expand=False)
-
-    # Part 2: Two text boxes for `q` and `unit`
-    frame_inputs = tk.Frame(root)
-    frame_inputs.pack(padx=10, pady=5, fill="x")
-
-    tk.Label(frame_inputs, text="Quantity (q):").grid(row=0, column=0, sticky="w")
-    q_entry = tk.Entry(frame_inputs)
-    q_entry.grid(row=0, column=1, sticky="ew", padx=5)
-    q_entry.bind('<Return>', on_ok)
-
-    tk.Label(frame_inputs, text="Unit:").grid(row=1, column=0, sticky="w")
-    unit_entry = tk.Entry(frame_inputs)
-    unit_entry.grid(row=1, column=1, sticky="ew", padx=5)
-    unit_entry.bind('<Return>', on_ok)
-
-    frame_inputs.columnconfigure(1, weight=1)
-
-    # Part 3: OK button
-    ok_button = tk.Button(root, text="OK", command=on_ok)
-    ok_button.pack(pady=10)
-
-    skip_button = tk.Button(root, text="Skip", command=on_skip)
-    skip_button.pack(pady=10)
-
-    # Center window on screen
-    root.update_idletasks()
-    w = root.winfo_width()
-    h = root.winfo_height()
-    screen_w = root.winfo_screenwidth()
-    screen_h = root.winfo_screenheight()
-    x = (screen_w // 2) - (w // 2)
-    y = (screen_h // 2) - (h // 2)
-    root.geometry(f"{w}x{h}+{x}+{y}")
-
-    q_entry.focus()
-
-    root.mainloop()
-
-    if result["q"] is not None and result["unit"] is not None:
+        # Save to file
         with open('replacement-file.txt', 'a') as f:
-            replacement_servings[p] = result
-            f.write(f"{p}\t{result["q"]}\t{result["unit"]}\n")
+            replacement_servings[p] = {"q": q_value, "unit": unit_value}
+            f.write(f"{p}\t{q_value}\t{unit_value}\n")
 
-    return result["q"], result["unit"]
+        return q_value, unit_value
 
 # fat, carbs, protein, caffeine, alcohol
 stupid_servings = [
@@ -106,14 +63,14 @@ acceptable_servings = [
     re.compile(r"^(1) ([a-z]+)", re.IGNORECASE),
     re.compile(r"^(\d+/\d+) (cup, raw)", re.IGNORECASE),
     re.compile(r"^(\d+) 100 calorie (package)", re.IGNORECASE),
-    re.compile(r"^(\d+\.\d+) (oz) ", re.IGNORECASE),
-    re.compile(r"^(\d+) (oz) ", re.IGNORECASE),
-    re.compile(r"^(\d+) (oz) serving,", re.IGNORECASE),
-    re.compile(r"^(\d+.\d+) (oz) serving,", re.IGNORECASE),
-    re.compile(r"^(.\d+) (oz) serving,", re.IGNORECASE),
-    re.compile(r"^(\d+)(oz)", re.IGNORECASE),
-    re.compile(r"^(\d+.\d+)(oz)", re.IGNORECASE),
-    re.compile(r"^(.\d+)(oz)", re.IGNORECASE),
+    re.compile(r"^(\d+\.\d+) (oz|ml|g) ", re.IGNORECASE),
+    re.compile(r"^(\d+) (oz|ml|g) ", re.IGNORECASE),
+    re.compile(r"^(\d+) (oz|ml|g) serving,", re.IGNORECASE),
+    re.compile(r"^(\d+.\d+) (oz|ml|g) serving,", re.IGNORECASE),
+    re.compile(r"^(.\d+) (oz|ml|g) serving,", re.IGNORECASE),
+    re.compile(r"^(\d+)(oz|ml|g)", re.IGNORECASE),
+    re.compile(r"^(\d+.\d+)(oz|ml|g)", re.IGNORECASE),
+    re.compile(r"^(.\d+)(oz|ml|g)", re.IGNORECASE),
 ]
 servings_fix_these_phrases = [
     {'find': re.compile(r'\u00BC', re.IGNORECASE), 'replace': '1/4'},
@@ -181,7 +138,7 @@ apostrophe_s = re.compile(r"'S")
 whitespace = re.compile(r"\s+")
 acai_berry = re.compile(r"AA BERRY", re.IGNORECASE)
 two_as = re.compile(r"\ba{2}\b", re.IGNORECASE)
-dumb_chars = re.compile(r"[^a-z0-9.,\- %]", re.IGNORECASE)
+dumb_chars = re.compile(r"[^a-z0-9.,\- %&]", re.IGNORECASE)
 
 def my_titlecase(input_string):
     output = input_string
@@ -215,7 +172,7 @@ def portion_name_post_process(portion_name: str):
             return None
     return p
 
-def parse_portion(q: float, p: str, upc: str):
+def parse_portion(q: float, p: str, upc: str = '', item: dict = None):
     if p in skip_file_servings:
         return None, None
     for phrase in servings_fix_these_phrases:
@@ -229,7 +186,7 @@ def parse_portion(q: float, p: str, upc: str):
     matching_regex = find_matching_regex(p)
     if matching_regex:
         return actually_parse(q, p, matching_regex)
-    return show_override_gui(p, upc)
+    return show_override_console(p, upc, item)
 
 def find_matching_regex(p)-> re.Pattern[str] | None:
     for acceptable_serving in acceptable_servings:
@@ -246,7 +203,7 @@ def actually_parse(q: float, p: str, pattern: re.Pattern[str]):
     return None, None
 
 def write_servings(input_servings: set):
-    with open("servings.jsonl", "w") as servings_file:
+    with open("output_servings.jsonl", "w") as servings_file:
         for unique_serving in sorted(input_servings):
             servings_file.write(unique_serving + '\n')
 
@@ -334,7 +291,7 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
             for portion in item['foodPortions']:
                 portion_name = portion['portionDescription']
                 quantity = 1
-                quantity, portion_name = parse_portion(quantity, portion_name, '')
+                quantity, portion_name = parse_portion(quantity, portion_name)
                 portion_name = portion_name_post_process(portion_name)
                 if quantity is None or portion_name is None:
                     sss = portion['portionDescription']
@@ -367,7 +324,7 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
             if count > 10000:
                 count = 0
                 write_servings(unique_servings)
-    with open("../data/FoodData_Central_branded_food_json_2025-04-24.json", 'r') as file:
+    with open("../data/FoodData_Central_branded_food_json_2025-12-18.json", 'r') as file:
         raw_data = json_stream.load(file)
         for item_stream in raw_data["BrandedFoods"]:
             item = to_standard_types(item_stream)
@@ -392,7 +349,7 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
             if 'householdServingFullText' in item:
                 portion_name = my_titlecase(item['householdServingFullText'])
                 quantity = 1
-                quantity, portion_name = parse_portion(quantity, portion_name, upc)
+                quantity, portion_name = parse_portion(quantity, portion_name, upc, item)
                 portion_name = portion_name_post_process(portion_name)
 
                 if quantity is None or portion_name is None:
@@ -409,7 +366,7 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
             if 'servingSizeUnit' in item:
                 portion_name = item['servingSizeUnit']
                 quantity = item['servingSize']
-                quantity, portion_name = parse_portion(quantity, portion_name, upc)
+                quantity, portion_name = parse_portion(quantity, portion_name, upc, item)
                 portion_name = portion_name_post_process(portion_name)
                 if quantity is None or portion_name is None:
                     sss = item['servingSizeUnit']
@@ -451,10 +408,15 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
                     name = name.replace(key, value)
             json_line = json.dumps({'name': name, 'servings': servings, 'upc': upc})
             output_file.write(json_line + "\n")
-            upc_file.write(f"{upc}\t{formatted_name}\n")
+            upc_file.write(f"{upc}\t{name}\n")
             count = count + 1
             if count > 10000:
                 write_servings(unique_servings)
                 count = 0
 
+
+# Save to file
+with open('replacement-file.txt', 'w') as f:
+    for key, value in replacement_servings.items():
+        f.write(f"{key}\t{value['q']}\t{value['unit']}")
 write_servings(unique_servings)
