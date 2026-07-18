@@ -67,9 +67,16 @@ body.dark .food-row {
 /* === Search result rows === */
 .search-row {
   display: block;
+  width: 100%;
   padding: 8px;
   border-bottom: 1px solid #eee;
   font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
   cursor: pointer;
   outline: none;
   overflow: hidden;
@@ -202,6 +209,58 @@ body.dark .options-value {
   .options-value {
     font-size: 14px;
   }
+}
+
+.options-row-danger {
+  color: #c0392b;
+  border-top: 1px solid #eee;
+}
+
+.options-row-danger[nav-selected="true"] {
+  background: #c0392b;
+  color: #fff;
+}
+
+body.dark .options-row-danger {
+  color: #e57373;
+  border-top-color: #2e2e30;
+}
+
+body.dark .options-row-danger[nav-selected="true"] {
+  background: #c0392b;
+  color: #fff;
+}
+
+/* === Bottom sheet rows === */
+.list-row {
+  display: block;
+  padding: 10px 8px;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+}
+
+.list-row[nav-selected="true"] {
+  background: #9b27af;
+  color: #fff;
+}
+
+.list-row.danger {
+  color: #c0392b;
+}
+
+.list-row.danger[nav-selected="true"] {
+  background: #c0392b;
+  color: #fff;
+}
+
+body.dark .list-row {
+  border-bottom-color: #2e2e30;
+}
+
+body.dark .list-row.danger {
+  color: #e57373;
 }
 
 .nutrient-row .nutrient-label {

@@ -35,3 +35,26 @@ test('works even if the data host is unreachable (offline-first)', async ({ page
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
   await expect(page.locator('#diary-empty')).toBeVisible();
 });
+
+test('an empty diary focuses "+ Add Food" first, not the date picker at the bottom', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('#btn-diary-add-food')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#input-diary-date')).not.toHaveAttribute('nav-selected', 'true');
+});
+
+test('a diary with entries focuses the first food row first, not the date picker', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  // Log something so the diary is non-empty, then come back to it.
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'SoftLeft' })));
+  await page.fill('#input-search', 'apple');
+  await page.waitForTimeout(250);
+  await page.locator('#panel-search .search-row', { hasText: 'Apple, Raw' }).click();
+
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.food-row').first()).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#btn-diary-add-food')).toHaveCount(0); // only exists when empty
+  await expect(page.locator('#input-diary-date')).not.toHaveAttribute('nav-selected', 'true');
+});

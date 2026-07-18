@@ -17,7 +17,7 @@ test('"+ Add new food" is the only row when a search has zero matches', async ({
   await page.fill('#input-search', 'zzzznonexistentfood');
   await page.waitForTimeout(250);
 
-  var rows = page.locator('.search-row');
+  var rows = page.locator('#panel-search .search-row');
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toHaveText('+ Add new food');
 });
@@ -26,7 +26,7 @@ test('"+ Add new food" is still the last row even when there are real matches', 
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);
 
-  var rows = page.locator('.search-row');
+  var rows = page.locator('#panel-search .search-row');
   await expect(rows.last()).toHaveText('+ Add new food');
   var count = await rows.count();
   expect(count).toBeGreaterThan(1);
@@ -35,7 +35,7 @@ test('"+ Add new food" is still the last row even when there are real matches', 
 test('submitting the form logs a diary entry, works offline (API not built yet), and the food becomes searchable', async ({ page }) => {
   await page.fill('#input-search', 'protein muffin');
   await page.waitForTimeout(250);
-  await page.locator('.search-row.add-new').click();
+  await page.locator('#panel-search .search-row.add-new').click();
 
   await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
   await expect(page.locator('#input-new-food-name')).toHaveValue('protein muffin');
@@ -67,7 +67,7 @@ test('submitting the form logs a diary entry, works offline (API not built yet),
 test('required fields: submitting without calories shows an error and adds nothing', async ({ page }) => {
   await page.fill('#input-search', 'mystery snack');
   await page.waitForTimeout(250);
-  await page.locator('.search-row.add-new').click();
+  await page.locator('#panel-search .search-row.add-new').click();
 
   await page.fill('#input-new-food-serving-qty', '1');
   await page.fill('#input-new-food-serving-name', 'bar');
@@ -81,7 +81,7 @@ test('required fields: submitting without calories shows an error and adds nothi
 test('left softkey discards the form and returns to Search with its prior results intact', async ({ page }) => {
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);
-  await page.locator('.search-row.add-new').click();
+  await page.locator('#panel-search .search-row.add-new').click();
   await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
 
   await page.fill('#input-new-food-name', 'should be discarded');

@@ -10,9 +10,35 @@
   <link rel="stylesheet" href="css/softkey.css?v=1.0.0">
   <link rel="stylesheet" href="css/input.css?v=1.0.0">
   <link rel="stylesheet" href="css/list.css?v=1.0.0">
+  <link rel="stylesheet" href="css/sheet.css?v=1.0.0">
+  <link rel="stylesheet" href="css/loader.css?v=1.0.0">
 </head>
 <body>
   <div id="root">
+
+    <!-- Panel: Loading — active by default in the raw markup (not set by JS)
+         so it paints immediately, before any script has parsed/run, on slow
+         devices where that gap is otherwise a blank white screen. -->
+    <div id="panel-loading" class="panel" active="true">
+      <div class="header">
+        <h1>Loading</h1>
+      </div>
+      <div class="panel-content">
+        <div class="loading-wrap">
+          <div class="lds-spinner">
+            <div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div>
+            <div></div><div></div><div></div><div></div>
+          </div>
+          <p class="loading-heading">Loading…</p>
+          <p class="loading-count" id="loading-count"></p>
+          <p class="loading-filename" id="loading-filename"></p>
+          <div class="progress-bar">
+            <div class="progress-bar-fill" id="loading-progress-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Panel: Diary (root panel) -->
     <div id="panel-diary" class="panel" active="false">
@@ -20,11 +46,6 @@
         <h1>Diary</h1>
       </div>
       <div class="panel-content">
-        <div class="input-wrap">
-          <input id="input-diary-date" type="date" nav-selectable="true">
-          <label for="input-diary-date">Date</label>
-        </div>
-
         <ul id="diary-ul" class="item-list"></ul>
         <p id="diary-empty" class="hint" style="display:none">Nothing logged for this day.</p>
 
@@ -49,6 +70,11 @@
             <span class="summary-label">Total Caffeine</span>
             <span class="summary-value"><span id="sum-caffeine">0</span> mg</span>
           </div>
+        </div>
+
+        <div class="input-wrap">
+          <input id="input-diary-date" type="date" nav-selectable="true">
+          <label for="input-diary-date">Date</label>
         </div>
       </div>
     </div>
@@ -163,8 +189,23 @@
             <span class="options-label">Version</span>
             <span class="options-value" id="opt-version"></span>
           </li>
+          <li class="options-row options-row-danger" id="opt-clear-db" nav-selectable="true">
+            <span class="options-label">Clear Local DB</span>
+          </li>
         </ul>
       </div>
+    </div>
+
+    <!-- Sheet overlay -->
+    <div id="sheet-overlay" active="false"></div>
+
+    <!-- Bottom sheet -->
+    <div id="sheet" active="false">
+      <div id="sheet-header" active="false">
+        <p id="sheet-title"></p>
+        <p id="sheet-note"></p>
+      </div>
+      <ul id="sheet-ul"></ul>
     </div>
 
     <!-- Toast -->

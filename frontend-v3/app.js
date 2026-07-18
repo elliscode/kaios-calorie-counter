@@ -148,7 +148,39 @@ function dbDeleteDiaryEntry(id, callback) {
 
 // ─── Data sync (manifest.json + food files → IndexedDB) ──────────────────────
 
-function syncData(callback) {
+// Reads a JSON response's body incrementally so download progress can be
+// reported as it comes in, rather than waiting on the whole response at once
+// (these food data files can be several MB). Falls back to a plain res.json()
+// if the runtime doesn't support streaming response bodies.
+function fetchJsonWithProgress(url, onProgress) {
+  return fetch(url).then(function (res) {
+    if (!res.body || !res.body.getReader) {
+      return res.json();
+    }
+    var totalStr = res.headers.get('Content-Length');
+    var total = totalStr ? parseInt(totalStr, 10) : 0;
+    var reader = res.body.getReader();
+    var received = 0;
+    var chunks = [];
+    function pump() {
+      return reader.read().then(function (result) {
+        if (result.done) {
+          return new Blob(chunks).text().then(function (text) { return JSON.parse(text); });
+        }
+        chunks.push(result.value);
+        received += result.value.length;
+        if (onProgress) onProgress(total ? Math.min(1, received / total) : null);
+        return pump();
+      });
+    }
+    return pump();
+  });
+}
+
+// onFileStart(index, total, fileEntry) fires once per file, before it starts downloading.
+// onFileProgress(fraction) fires repeatedly while the current file streams in (fraction is
+// null if the server didn't send a Content-Length to compute a fraction from).
+function syncData(onFileStart, onFileProgress, callback) {
   fetch(DATA_HOST + '/manifest.json')
     .then(function (res) { return res.json(); })
     .then(function (manifest) {
@@ -156,12 +188,13 @@ function syncData(callback) {
         var toFetch = (manifest.files || []).filter(function (f) {
           return syncedIds.indexOf(f.id) === -1;
         });
+        if (!toFetch.length) { callback(); return; }
         fetchNext(0);
         function fetchNext(i) {
           if (i >= toFetch.length) { callback(); return; }
           var fileEntry = toFetch[i];
-          fetch(DATA_HOST + fileEntry.url)
-            .then(function (res) { return res.json(); })
+          onFileStart(i + 1, toFetch.length, fileEntry);
+          fetchJsonWithProgress(DATA_HOST + fileEntry.url, onFileProgress)
             .then(function (foodsArr) {
               dbBulkPutFoods(foodsArr, function () {
                 dbMarkFileSynced(fileEntry.id, function () { fetchNext(i + 1); });
@@ -195,6 +228,7 @@ function setSoftkeys(left, center, right) {
 }
 
 function updateSoftkeysForFocus() {
+  if (isSheetOpen()) return; // openSheet()/closeSheet() own the softkeys while it's up
   var panel = activePanel();
   if (!panel) return;
   if (panel.id === 'panel-diary') {
@@ -218,6 +252,9 @@ function activePanel() {
 }
 
 function selectables() {
+  if (isSheetOpen()) {
+    return Array.prototype.slice.call(document.querySelectorAll('#sheet [nav-selectable="true"]'));
+  }
   var panel = activePanel();
   if (!panel) return [];
   return Array.prototype.slice.call(panel.querySelectorAll('[nav-selectable="true"]'));
@@ -279,6 +316,63 @@ function isTextInput(el) {
   return el && ((el.tagName === 'INPUT' && el.type !== 'file') || el.tagName === 'TEXTAREA');
 }
 
+// ─── Bottom Sheet ─────────────────────────────────────────────────────────────
+
+var _sheetSavedSoftkeys = ['', '', ''];
+var _sheetSavedFocus = null;
+
+function isSheetOpen() {
+  return document.getElementById('sheet').getAttribute('active') === 'true';
+}
+
+function openSheet(items, header) {
+  _sheetSavedFocus = focused();
+
+  var sheetHeader = document.getElementById('sheet-header');
+  if (header) {
+    document.getElementById('sheet-title').textContent = header.title;
+    document.getElementById('sheet-note').textContent = header.note;
+    sheetHeader.setAttribute('active', 'true');
+  } else {
+    sheetHeader.setAttribute('active', 'false');
+  }
+
+  var ul = document.getElementById('sheet-ul');
+  ul.innerHTML = '';
+  items.forEach(function (item) {
+    var li = document.createElement('li');
+    li.className = 'list-row' + (item.danger ? ' danger' : '');
+    li.setAttribute('nav-selectable', 'true');
+    li.textContent = item.label;
+    li.addEventListener('click', item.action);
+    ul.appendChild(li);
+  });
+  _sheetSavedSoftkeys = [
+    document.getElementById('sk-left').textContent,
+    document.getElementById('sk-center').textContent,
+    document.getElementById('sk-right').textContent
+  ];
+  document.getElementById('sheet').setAttribute('active', 'true');
+  document.getElementById('sheet-overlay').setAttribute('active', 'true');
+  setSoftkeys('Back', 'SELECT', '');
+  var first = ul.querySelector('[nav-selectable="true"]');
+  if (first) setFocus(first);
+}
+
+function closeSheet() {
+  document.getElementById('sheet').setAttribute('active', 'false');
+  document.getElementById('sheet-overlay').setAttribute('active', 'false');
+  document.getElementById('sheet-ul').innerHTML = '';
+  setSoftkeys(_sheetSavedSoftkeys[0], _sheetSavedSoftkeys[1], _sheetSavedSoftkeys[2]);
+  var restore = _sheetSavedFocus;
+  _sheetSavedFocus = null;
+  if (!restore) {
+    var panel = activePanel();
+    if (panel) restore = panel.querySelector('[nav-selectable="true"]');
+  }
+  if (restore) setFocus(restore);
+}
+
 // ─── Key Handling ─────────────────────────────────────────────────────────────
 
 document.addEventListener('mousedown', function () {
@@ -293,6 +387,16 @@ document.addEventListener('keydown', function (e) {
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
       e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     document.body.classList.add('using-keyboard');
+  }
+  if (isSheetOpen()) {
+    switch (e.key) {
+      case 'ArrowUp':   e.preventDefault(); moveFocus('up');   break;
+      case 'ArrowDown': e.preventDefault(); moveFocus('down'); break;
+      case 'Enter':     e.preventDefault(); interact(focused()); break;
+      case 'SoftLeft':
+      case 'Backspace': e.preventDefault(); closeSheet(); break;
+    }
+    return;
   }
   switch (e.key) {
     case 'ArrowUp':
@@ -383,9 +487,12 @@ function handleSoftRight() {
   // panel-options: no right-softkey action
 }
 
-document.getElementById('sk-left').addEventListener('click', handleSoftLeft);
+document.getElementById('sk-left').addEventListener('click', function () {
+  if (isSheetOpen()) { closeSheet(); } else { handleSoftLeft(); }
+});
 document.getElementById('sk-right').addEventListener('click', handleSoftRight);
 document.getElementById('sk-center').addEventListener('click', function () {
+  if (isSheetOpen()) { interact(focused()); return; }
   var panel = activePanel();
   if (!panel) return;
   if (panel.id === 'panel-search') {
@@ -400,22 +507,28 @@ document.getElementById('sk-center').addEventListener('click', function () {
     interact(focused());
   }
 });
+document.getElementById('sheet-overlay').addEventListener('click', closeSheet);
 
 // ─── Screen: Diary ────────────────────────────────────────────────────────────
 
 function showDiaryPanel() {
-  showPanel('panel-diary');
   document.getElementById('input-diary-date').value = state.currentDate;
   setSoftkeys('Search', 'Edit', 'Options');
-  renderDiary();
+  // Build the diary list/Add-Food-button first, THEN show the panel — showPanel()
+  // auto-focuses the first nav-selectable element it finds, and if that ran
+  // before the DOM reflects the current date's entries, focus could land on
+  // the date input at the bottom instead of the first row / "+ Add Food".
+  renderDiary(function () {
+    showPanel('panel-diary');
+  });
 }
 
 document.getElementById('input-diary-date').addEventListener('change', function (e) {
   state.currentDate = e.target.value || todayStr();
-  renderDiary();
+  renderDiary(); // already on this panel — don't re-show/re-focus, just refresh the list
 });
 
-function renderDiary() {
+function renderDiary(callback) {
   dbGetDiaryByDate(state.currentDate, function (entries) {
     state.diaryEntries = entries;
     var ul = document.getElementById('diary-ul');
@@ -447,7 +560,25 @@ function renderDiary() {
       ul.appendChild(li);
     });
 
+    // Only exists in the DOM when the diary is actually empty — so it's never
+    // a hidden-but-still-focusable element, and it's what a fresh launch
+    // lands D-pad focus on instead of the date picker at the bottom (KaiOS's
+    // native date input takes over the full screen the moment it gets focus).
+    var existingAddFoodBtn = document.getElementById('btn-diary-add-food');
+    if (existingAddFoodBtn) existingAddFoodBtn.remove();
+    if (!entries.length) {
+      var addFoodBtn = document.createElement('button');
+      addFoodBtn.id = 'btn-diary-add-food';
+      addFoodBtn.type = 'button';
+      addFoodBtn.className = 'search-row add-new';
+      addFoodBtn.setAttribute('nav-selectable', 'true');
+      addFoodBtn.textContent = '+ Add Food';
+      addFoodBtn.addEventListener('click', showSearchPanel);
+      document.getElementById('diary-empty').insertAdjacentElement('afterend', addFoodBtn);
+    }
+
     renderDiarySummary(entries);
+    if (callback) callback();
   });
 }
 
@@ -811,15 +942,58 @@ function showOptionsPanel() {
   setSoftkeys('Back', 'SELECT', '');
 }
 
+document.getElementById('opt-clear-db').addEventListener('click', confirmClearLocalDb);
+
+function confirmClearLocalDb() {
+  openSheet(
+    [
+      {
+        label: 'Yes, delete the local DB',
+        danger: true,
+        action: function () { closeSheet(); doClearLocalDb(); }
+      },
+      {
+        label: 'No, do not delete',
+        action: function () { closeSheet(); }
+      }
+    ],
+    {
+      title: 'Clear local database?',
+      note: 'Are you sure you want to clear the local database? All diary entries, custom foods, and recipes will be deleted permanently.'
+    }
+  );
+}
+
+function doClearLocalDb() {
+  if (db) { db.close(); db = null; }
+  var req = indexedDB.deleteDatabase(DB_NAME);
+  req.onsuccess = function () { window.location.reload(); };
+  req.onerror = function () { showStatus('Could not clear the local database', true); };
+  req.onblocked = function () { window.location.reload(); };
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 openDB(function () {
-  syncData(function () {
-    dbGetAllFoods(function (foods) {
-      state.allFoods = foods;
-      state.foodsById = {};
-      foods.forEach(function (f) { state.foodsById[f.id] = f; });
-      showDiaryPanel();
-    });
-  });
+  syncData(
+    function onFileStart(index, total, fileEntry) {
+      showPanel('panel-loading');
+      var filename = fileEntry.url.replace(/^\//, '');
+      document.getElementById('loading-count').textContent = 'Loading ' + index + ' of ' + total + ' database files…';
+      document.getElementById('loading-filename').textContent = filename;
+      document.getElementById('loading-progress-fill').style.width = '0%';
+    },
+    function onFileProgress(fraction) {
+      var pct = fraction === null ? 100 : Math.round(fraction * 100);
+      document.getElementById('loading-progress-fill').style.width = pct + '%';
+    },
+    function onDone() {
+      dbGetAllFoods(function (foods) {
+        state.allFoods = foods;
+        state.foodsById = {};
+        foods.forEach(function (f) { state.foodsById[f.id] = f; });
+        showDiaryPanel();
+      });
+    }
+  );
 });
