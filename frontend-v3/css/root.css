@@ -1,0 +1,143 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: auto;
+  overflow: auto;
+  font-family: sans-serif;
+  font-size: 14px;
+  background: #fff;
+  color: #111;
+}
+
+#root {
+  width: 100%;
+  height: auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel {
+  display: none;
+  flex-direction: column;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.panel[active="true"] {
+  display: flex;
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: visible;
+  padding: 8px;
+  padding-bottom: 38px; /* KaiOS: room for 30px softkey bar */
+}
+
+.hint {
+  font-size: 12px;
+  color: #666;
+  margin: 8px 4px;
+  line-height: 1.4;
+}
+
+.status-toast {
+  position: fixed;
+  bottom: 34px; /* KaiOS: above softkey bar */
+  left: 0;
+  right: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  text-align: center;
+  z-index: 10;
+  display: none;
+  pointer-events: none;
+}
+
+.status-toast[visible="true"] {
+  display: block;
+}
+
+.status-toast.info {
+  background: rgba(106, 0, 128, 0.85);
+  color: #fff;
+}
+
+.status-toast.error {
+  background: rgba(180, 0, 0, 0.85);
+  color: #fff;
+}
+
+/* === All screens above KaiOS (241px+) ========================= */
+@media (min-width: 241px) {
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100%;
+  }
+
+  .panel {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .panel-content {
+    overflow-y: auto;
+    padding-bottom: 8px;
+  }
+
+  .status-toast {
+    bottom: 8px;
+  }
+
+  .header {
+    padding: 6px 16px;
+  }
+}
+
+/* === Text selection disabled on touch screens only (241px – 767px) === */
+@media (min-width: 241px) and (max-width: 767px) {
+  * {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input, select, textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+/* === Dark mode === */
+body.dark {
+  background: #1c1c1e;
+  color: #e5e7eb;
+}
+
+body.dark #softkey {
+  background: #252528;
+  border-top-color: #3a3a40;
+}
+
+body.dark #sk-left,
+body.dark #sk-right {
+  color: #c77ddb;
+}
+
+body.dark #sk-center {
+  color: #e5e7eb;
+}
+
+body.dark .hint {
+  color: #8b8b93;
+}

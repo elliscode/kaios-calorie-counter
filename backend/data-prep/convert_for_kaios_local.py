@@ -1,9 +1,17 @@
 import os
 import re
 import json
+import uuid
 
 import json_stream
 from json_stream_to_standard_types import to_standard_types
+
+# Deterministic, name-seeded ids for the base dataset only — re-running this
+# script must not reshuffle ids and orphan diary entries / manifest sync state
+# that already reference them. Custom foods submitted from the app use a
+# purely random GUID instead (see frontend-v3/app.js), since their name can
+# still be edited during review after that id has already been handed out.
+FOOD_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, 'kaios-calorie-counter.foods')
 
 def show_override_console(p: str) -> tuple[str, str]:
     """
@@ -121,6 +129,7 @@ macros = {
     'Iron, Fe': 'iron',
     'Potassium, K': 'potassium',
     'not-present-2': 'addedSugar',
+    'Caffeine': 'caffeine',
 }
 
 apostrophe_s = re.compile(r"'S")
@@ -271,7 +280,8 @@ with open("../data/surveyDownload.json", 'r') as file:
             servings.append(serving)
         servings.append(serving_100g)
 
-        foods.append({'name': formatted_name, 'servings': servings})
+        food_id = str(uuid.uuid5(FOOD_NAMESPACE, formatted_name))
+        foods.append({'id': food_id, 'name': formatted_name, 'servings': servings})
 
 with open("output_kaios_local.json", "w") as output_file:
     output_file.write("[\n")

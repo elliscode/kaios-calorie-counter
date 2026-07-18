@@ -1,0 +1,138 @@
+.input-wrap {
+  position: relative;
+  margin: 16px 4px 8px;
+}
+
+.input-wrap input,
+.input-wrap select {
+  width: 100%;
+  border: none;
+  border-bottom: 2px solid #ccc;
+  padding: 14px 0 4px;
+  font-size: 14px;
+  background: transparent;
+  outline: none;
+  color: #111;
+  -moz-appearance: textfield;
+}
+
+.input-wrap input:focus,
+.input-wrap select:focus {
+  border-bottom-color: #6a0080;
+}
+
+.input-wrap label {
+  position: absolute;
+  left: 0;
+  top: 14px;
+  font-size: 14px;
+  color: #999;
+  pointer-events: none;
+  transition: top 0.15s, font-size 0.15s, color 0.15s;
+}
+
+.input-wrap input:not(:placeholder-shown) + label,
+.input-wrap input:focus + label,
+.input-wrap.has-value label {
+  top: 0;
+  font-size: 11px;
+  color: #6a0080;
+}
+
+/* <select> has no placeholder/:placeholder-shown concept — it always shows
+   its currently selected option, so its label is always in the "floated"
+   position rather than reacting to an empty/non-empty state. */
+.input-wrap-select label {
+  top: 0;
+  font-size: 11px;
+  color: #6a0080;
+}
+
+.input-wrap-select select {
+  padding-top: 16px;
+}
+
+body.dark .input-wrap input,
+body.dark .input-wrap select {
+  color: #e5e7eb;
+  border-bottom-color: #4a4a52;
+}
+
+body.dark .input-wrap label {
+  color: #8b8b93;
+}
+
+body.dark .input-wrap input:not(:placeholder-shown) + label,
+body.dark .input-wrap input:focus + label,
+body.dark .input-wrap.has-value label {
+  color: #c77ddb;
+}
+
+/* Search box: plain, full-width, no floating label per spec */
+.search-input {
+  display: block;
+  width: 100%;
+  font-size: 16px;
+  padding: 8px 6px;
+  border: none;
+  border-bottom: 2px solid #ccc;
+  background: transparent;
+  outline: none;
+  color: #111;
+}
+
+.search-input:focus {
+  border-bottom-color: #6a0080;
+}
+
+body.dark .search-input {
+  color: #e5e7eb;
+  border-bottom-color: #4a4a52;
+}
+
+/* File input: no placeholder/floating-label concept, so just a plain
+   static label above the native file-picker control. */
+.file-field {
+  margin: 16px 4px 8px;
+}
+
+.file-field label {
+  display: block;
+  font-size: 11px;
+  color: #6a0080;
+  margin-bottom: 6px;
+}
+
+.file-field input[type="file"] {
+  width: 100%;
+  font-size: 12px;
+  color: inherit;
+}
+
+body.dark .file-field label {
+  color: #c77ddb;
+}
+
+.submit-button {
+  display: block;
+  width: 100%;
+  margin: 20px 4px 8px;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #fff;
+  background: #6a0080;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+}
+
+.submit-button[nav-selected="true"] {
+  background: #9b27af;
+}
+
+body.dark .submit-button {
+  background: #9b27af;
+}

@@ -1,0 +1,10 @@
+{
+  "name": "kaios-calorie-counter-frontend",
+  "private": true,
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

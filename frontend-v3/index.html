@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Calorie Counter</title>
+
+  <link rel="stylesheet" href="css/root.css?v=1.0.0">
+  <link rel="stylesheet" href="css/header.css?v=1.0.0">
+  <link rel="stylesheet" href="css/softkey.css?v=1.0.0">
+  <link rel="stylesheet" href="css/input.css?v=1.0.0">
+  <link rel="stylesheet" href="css/list.css?v=1.0.0">
+</head>
+<body>
+  <div id="root">
+
+    <!-- Panel: Diary (root panel) -->
+    <div id="panel-diary" class="panel" active="false">
+      <div class="header">
+        <h1>Diary</h1>
+      </div>
+      <div class="panel-content">
+        <div class="input-wrap">
+          <input id="input-diary-date" type="date" nav-selectable="true">
+          <label for="input-diary-date">Date</label>
+        </div>
+
+        <ul id="diary-ul" class="item-list"></ul>
+        <p id="diary-empty" class="hint" style="display:none">Nothing logged for this day.</p>
+
+        <div class="summary-table" id="diary-summary">
+          <div class="summary-row">
+            <span class="summary-label">Total Calories</span>
+            <span class="summary-value"><span id="sum-calories">0</span></span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Total Fat</span>
+            <span class="summary-value"><span id="sum-fat">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Total Carbs</span>
+            <span class="summary-value"><span id="sum-carbohydrates">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Total Protein</span>
+            <span class="summary-value"><span id="sum-protein">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Total Caffeine</span>
+            <span class="summary-value"><span id="sum-caffeine">0</span> mg</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel: Search -->
+    <div id="panel-search" class="panel" active="false">
+      <div class="header">
+        <h1>Search</h1>
+      </div>
+      <div class="panel-content">
+        <input id="input-search" class="search-input" type="text" placeholder="Search foods…" nav-selectable="true">
+        <ul id="search-ul" class="item-list"></ul>
+      </div>
+    </div>
+
+    <!-- Panel: Servings -->
+    <div id="panel-servings" class="panel" active="false">
+      <div class="header">
+        <h1 id="servings-title">Edit Serving</h1>
+      </div>
+      <div class="panel-content">
+        <div class="input-wrap">
+          <input id="input-serving-qty" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
+          <label for="input-serving-qty">Serving size</label>
+        </div>
+        <div class="input-wrap input-wrap-select">
+          <select id="input-serving-name" nav-selectable="true"></select>
+          <label for="input-serving-name">Serving</label>
+        </div>
+
+        <div class="summary-table" id="servings-summary">
+          <div class="summary-row">
+            <span class="summary-label">Calories</span>
+            <span class="summary-value"><span id="serv-calories">0</span></span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Fat</span>
+            <span class="summary-value"><span id="serv-fat">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Carbs</span>
+            <span class="summary-value"><span id="serv-carbohydrates">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Protein</span>
+            <span class="summary-value"><span id="serv-protein">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Caffeine</span>
+            <span class="summary-value"><span id="serv-caffeine">0</span> mg</span>
+          </div>
+        </div>
+
+        <div class="nutrient-table" id="servings-nutrients"></div>
+      </div>
+    </div>
+
+    <!-- Panel: New Food -->
+    <div id="panel-new-food" class="panel" active="false">
+      <div class="header">
+        <h1>Add New Food</h1>
+      </div>
+      <div class="panel-content">
+        <div class="input-wrap">
+          <input id="input-new-food-name" type="text" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-name">Name</label>
+        </div>
+
+        <div class="input-wrap">
+          <input id="input-new-food-serving-qty" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-serving-qty">Serving size</label>
+        </div>
+        <div class="input-wrap">
+          <input id="input-new-food-serving-name" type="text" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-serving-name">Serving unit (e.g. cup, slice)</label>
+        </div>
+
+        <div class="input-wrap">
+          <input id="input-new-food-calories" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-calories">Calories</label>
+        </div>
+        <div class="input-wrap">
+          <input id="input-new-food-fat" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-fat">Fat (g)</label>
+        </div>
+        <div class="input-wrap">
+          <input id="input-new-food-carbs" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-carbs">Carbs (g)</label>
+        </div>
+        <div class="input-wrap">
+          <input id="input-new-food-protein" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-protein">Protein (g)</label>
+        </div>
+
+        <div class="file-field">
+          <label for="input-new-food-photo">Nutrition facts photo</label>
+          <input id="input-new-food-photo" type="file" accept="image/*" nav-selectable="true">
+        </div>
+
+        <button id="btn-new-food-submit" class="submit-button" type="button" nav-selectable="true">Submit</button>
+      </div>
+    </div>
+
+    <!-- Panel: Options -->
+    <div id="panel-options" class="panel" active="false">
+      <div class="header">
+        <h1>Options</h1>
+      </div>
+      <div class="panel-content">
+        <ul class="item-list">
+          <li class="options-row" nav-selectable="true">
+            <span class="options-label">Version</span>
+            <span class="options-value" id="opt-version"></span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="status" class="status-toast"></div>
+
+    <!-- Softkey bar -->
+    <div id="softkey">
+      <label id="sk-left"></label>
+      <label id="sk-center"></label>
+      <label id="sk-right"></label>
+    </div>
+
+  </div>
+  <script src="app.js?v=1.0.0"></script>
+</body>
+</html>

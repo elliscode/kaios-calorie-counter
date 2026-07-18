@@ -162,8 +162,23 @@ collected-static/
 ts/_*
 .DS_Store
 Pipfile.lock
-index.html
-*.json
-*.csv
-*.zip
-output*
+backend/index.html
+backend/*.json
+backend/**/*.json
+backend/*.csv
+backend/**/*.csv
+backend/*.zip
+backend/**/*.zip
+backend/**/output*
+
+# frontend-v3 (Playwright/npm)
+frontend-v3/node_modules/
+frontend-v3/test-results/
+frontend-v3/playwright-report/
+frontend-v3/blob-report/
+frontend-v3/*.zip
+
+# s3/ release.sh copies these in from frontend-v3/ on every run — not source of truth here
+s3/index.html
+s3/app.js
+s3/css/

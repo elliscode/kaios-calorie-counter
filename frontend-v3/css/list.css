@@ -1,0 +1,222 @@
+.item-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.list-row-empty {
+  display: block;
+  padding: 10px 8px;
+  font-size: 14px;
+  color: #999;
+  border-bottom: 1px solid #eee;
+}
+
+body.dark .list-row-empty {
+  color: #5a5a62;
+  border-bottom-color: #2e2e30;
+}
+
+/* === Diary food rows: name / serving / calories === */
+.food-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+
+.food-row-name {
+  flex: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.food-row-serving {
+  flex: 1;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.food-row-calories {
+  flex: 0 0 auto;
+  text-align: right;
+  min-width: 36px;
+}
+
+.food-row[nav-selected="true"] {
+  background: #9b27af;
+  color: #fff;
+}
+
+.food-row[nav-selected="true"] .food-row-serving {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+body.dark .food-row {
+  border-bottom-color: #2e2e30;
+}
+
+/* === Search result rows === */
+.search-row {
+  display: block;
+  padding: 8px;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-row[nav-selected="true"] {
+  background: #9b27af;
+  color: #fff;
+}
+
+.search-row.in-tray::after {
+  content: ' ✓';
+  color: #9b27af;
+}
+
+.search-row[nav-selected="true"].in-tray::after {
+  color: #fff;
+}
+
+.search-row.add-new {
+  color: #6a0080;
+  font-weight: 600;
+  border-top: 1px solid #ddd;
+  margin-top: 4px;
+}
+
+.search-row.add-new[nav-selected="true"] {
+  background: #9b27af;
+  color: #fff;
+}
+
+body.dark .search-row.add-new {
+  color: #c77ddb;
+  border-top-color: #2e2e30;
+}
+
+body.dark .search-row {
+  border-bottom-color: #2e2e30;
+}
+
+/* === Summary table (Diary) === */
+.summary-table {
+  margin-top: 10px;
+  border-top: 2px solid #6a0080;
+  padding-top: 4px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 4px;
+  font-size: 13px;
+}
+
+.summary-row .summary-label {
+  color: #666;
+}
+
+.summary-row .summary-value {
+  font-weight: 600;
+}
+
+body.dark .summary-row .summary-label {
+  color: #8b8b93;
+}
+
+/* === Nutrient breakdown (Servings panel) === */
+.nutrient-table {
+  margin-top: 10px;
+}
+
+.nutrient-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 4px;
+  font-size: 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+body.dark .nutrient-row {
+  border-bottom-color: #2a2a2c;
+}
+
+/* === Options rows === */
+.options-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 8px;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+}
+
+.options-row[nav-selected="true"] {
+  background: #9b27af;
+  color: #fff;
+}
+
+.options-label {
+  flex: 1;
+}
+
+.options-value {
+  color: #666;
+  font-size: 12px;
+}
+
+.options-row[nav-selected="true"] .options-value {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+body.dark .options-row {
+  border-bottom-color: #2e2e30;
+}
+
+body.dark .options-value {
+  color: #8b8b93;
+}
+
+@media (min-width: 241px) {
+  .options-row {
+    padding: 14px 16px;
+    font-size: 16px;
+  }
+
+  .options-value {
+    font-size: 14px;
+  }
+}
+
+.nutrient-row .nutrient-label {
+  color: #666;
+  text-transform: capitalize;
+}
+
+body.dark .nutrient-row .nutrient-label {
+  color: #8b8b93;
+}
+
+@media (min-width: 241px) {
+  .food-row,
+  .search-row {
+    padding: 12px 16px;
+    font-size: 15px;
+  }
+}
