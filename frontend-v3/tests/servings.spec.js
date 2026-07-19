@@ -1,8 +1,8 @@
 const { test, expect } = require('@playwright/test');
-const { mockDataHost, pressSoftKey } = require('./helpers');
+const { mockDataHost, pressSoftKey, goToSearchFromDiary } = require('./helpers');
 
 async function quickAddApple(page) {
-  await pressSoftKey(page, 'SoftLeft');
+  await goToSearchFromDiary(page);
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);
   await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();

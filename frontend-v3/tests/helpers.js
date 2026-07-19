@@ -18,4 +18,10 @@ async function pressSoftKey(page, key) {
   }, key);
 }
 
-module.exports = { mockDataHost: mockDataHost, pressSoftKey: pressSoftKey };
+// Diary -> Search is now via the permanent "+ Add Food" button (no more
+// Search left-softkey on Diary), not a pressSoftKey call.
+async function goToSearchFromDiary(page) {
+  await page.locator('#btn-diary-add-food').click();
+}
+
+module.exports = { mockDataHost: mockDataHost, pressSoftKey: pressSoftKey, goToSearchFromDiary: goToSearchFromDiary };

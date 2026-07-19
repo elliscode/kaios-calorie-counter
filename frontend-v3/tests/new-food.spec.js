@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { mockDataHost, pressSoftKey } = require('./helpers');
+const { mockDataHost, pressSoftKey, goToSearchFromDiary } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
   await mockDataHost(page);
@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
   });
   await page.goto('/');
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
-  await pressSoftKey(page, 'SoftLeft'); // Diary -> Search
+  await goToSearchFromDiary(page);
 });
 
 test('"+ Add new food" is the only row when a search has zero matches', async ({ page }) => {
@@ -58,7 +58,7 @@ test('submitting the form logs a diary entry, works offline (API not built yet),
   await expect(page.locator('#sum-protein')).toHaveText('20');
 
   // Now searchable again this session (proves the local foods cache + state.allFoods updated).
-  await pressSoftKey(page, 'SoftLeft');
+  await goToSearchFromDiary(page);
   await page.fill('#input-search', 'protein muffin');
   await page.waitForTimeout(250);
   await expect(page.locator('.search-row', { hasText: 'protein muffin' })).toBeVisible();

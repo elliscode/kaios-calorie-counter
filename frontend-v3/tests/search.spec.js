@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { mockDataHost, pressSoftKey } = require('./helpers');
+const { mockDataHost, pressSoftKey, goToSearchFromDiary } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
   await mockDataHost(page);
@@ -7,13 +7,13 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
 });
 
-test('left softkey on Diary opens Search', async ({ page }) => {
-  await pressSoftKey(page, 'SoftLeft');
+test('"+ Add Food" on Diary opens Search', async ({ page }) => {
+  await goToSearchFromDiary(page);
   await expect(page.locator('#panel-search')).toHaveAttribute('active', 'true');
 });
 
 test('quick add: clicking a result commits it with the default g serving', async ({ page }) => {
-  await pressSoftKey(page, 'SoftLeft');
+  await goToSearchFromDiary(page);
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);
 
@@ -28,7 +28,7 @@ test('quick add: clicking a result commits it with the default g serving', async
 });
 
 test('left softkey abandons the tray and returns to Diary', async ({ page }) => {
-  await pressSoftKey(page, 'SoftLeft');
+  await goToSearchFromDiary(page);
   await page.fill('#input-search', 'a');
   await page.waitForTimeout(250);
   await page.keyboard.press('ArrowDown'); // focus first result
@@ -40,19 +40,20 @@ test('left softkey abandons the tray and returns to Diary', async ({ page }) => 
 });
 
 test('tray: queue multiple foods with right softkey, commit them all with center/Enter', async ({ page }) => {
-  await pressSoftKey(page, 'SoftLeft');
-  await page.fill('#input-search', 'a'); // matches Coffee, Banana, Chicken Sandwich, Apple (not Milk)
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'a'); // matches Apple, Banana, Butter Organic, Chicken Sandwich, Coffee
   await page.waitForTimeout(250);
 
-  await page.keyboard.press('ArrowDown'); // focus 1st result (Apple, Raw — ids sort ahead of Coffee here)
+  // No usage history yet, so results are purely alphabetical: Apple, Banana, ...
+  await page.keyboard.press('ArrowDown'); // focus 1st result (Apple, Raw)
   await pressSoftKey(page, 'SoftRight'); // queue it
   await expect(page.locator('#sk-center')).toHaveText('Add (2)');
 
-  await page.keyboard.press('ArrowDown'); // focus 2nd result (Coffee, Black)
+  await page.keyboard.press('ArrowDown'); // focus 2nd result (Banana, Raw)
   await page.keyboard.press('Enter'); // commit focused + tray
 
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
   var names = await page.locator('.food-row-name').allTextContents();
-  expect(names.sort()).toEqual(['Apple, Raw', 'Coffee, Black']);
-  await expect(page.locator('#sum-calories')).toHaveText('53'); // 52 (apple@100g) + 1 (coffee@100g)
+  expect(names.sort()).toEqual(['Apple, Raw', 'Banana, Raw']);
+  await expect(page.locator('#sum-calories')).toHaveText('141'); // 52 (apple@100g) + 89 (banana@100g)
 });

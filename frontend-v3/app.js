@@ -11,6 +11,7 @@ var state = {
   currentDate: todayStr(),
   allFoods: [],
   foodsById: {},
+  usageCounts: {},
   tray: [],
   diaryEntries: [],
   editingEntry: null,
@@ -66,16 +67,44 @@ function showStatus(msg, isError) {
 
 var db = null;
 var DB_NAME = 'kaios-calorie-counter';
-var DB_VERSION = 1;
+var DB_VERSION = 2;
 
 function openDB(callback) {
   var req = indexedDB.open(DB_NAME, DB_VERSION);
   req.onupgradeneeded = function (e) {
     var d = e.target.result;
-    d.createObjectStore('foods', { keyPath: 'id' });
-    var diaryStore = d.createObjectStore('diary', { keyPath: 'id', autoIncrement: true });
-    diaryStore.createIndex('byDate', 'date', { unique: false });
-    d.createObjectStore('syncedFiles', { keyPath: 'id' });
+    var tx = e.target.transaction;
+
+    if (!d.objectStoreNames.contains('foods')) {
+      d.createObjectStore('foods', { keyPath: 'id' });
+    }
+
+    var diaryStore;
+    if (!d.objectStoreNames.contains('diary')) {
+      diaryStore = d.createObjectStore('diary', { keyPath: 'id', autoIncrement: true });
+      diaryStore.createIndex('byDate', 'date', { unique: false });
+    } else {
+      diaryStore = tx.objectStore('diary');
+    }
+
+    if (!d.objectStoreNames.contains('syncedFiles')) {
+      d.createObjectStore('syncedFiles', { keyPath: 'id' });
+    }
+
+    if (!d.objectStoreNames.contains('usageCounts')) {
+      var usageStore = d.createObjectStore('usageCounts', { keyPath: 'id' });
+      // Backfill from any diary entries that already existed before this
+      // store did, so upgrading devices don't start every food at zero.
+      diaryStore.getAll().onsuccess = function (ev) {
+        var counts = {};
+        (ev.target.result || []).forEach(function (entry) {
+          counts[entry.foodId] = (counts[entry.foodId] || 0) + 1;
+        });
+        Object.keys(counts).forEach(function (foodId) {
+          usageStore.put({ id: foodId, count: counts[foodId] });
+        });
+      };
+    }
   };
   req.onsuccess = function (e) {
     db = e.target.result;
@@ -142,6 +171,41 @@ function dbUpdateDiaryEntry(id, updatedEntry, callback) {
 function dbDeleteDiaryEntry(id, callback) {
   var tx = db.transaction('diary', 'readwrite');
   tx.objectStore('diary').delete(id);
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+function dbGetAllUsageCounts(callback) {
+  var tx = db.transaction('usageCounts', 'readonly');
+  var req = tx.objectStore('usageCounts').getAll();
+  req.onsuccess = function () { callback(req.result || []); };
+  req.onerror = function () { callback([]); };
+}
+
+function dbIncrementUsageCount(foodId, callback) {
+  var tx = db.transaction('usageCounts', 'readwrite');
+  var store = tx.objectStore('usageCounts');
+  var req = store.get(foodId);
+  req.onsuccess = function () {
+    var rec = req.result || { id: foodId, count: 0 };
+    rec.count += 1;
+    store.put(rec);
+  };
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+function dbDecrementUsageCount(foodId, callback) {
+  var tx = db.transaction('usageCounts', 'readwrite');
+  var store = tx.objectStore('usageCounts');
+  var req = store.get(foodId);
+  req.onsuccess = function () {
+    var rec = req.result;
+    if (rec) {
+      rec.count = Math.max(0, rec.count - 1);
+      store.put(rec);
+    }
+  };
   tx.oncomplete = function () { callback(); };
   tx.onerror = function () { callback(); };
 }
@@ -232,7 +296,9 @@ function updateSoftkeysForFocus() {
   var panel = activePanel();
   if (!panel) return;
   if (panel.id === 'panel-diary') {
-    setSoftkeys('Search', 'Edit', 'Options');
+    var focusedEl = focused();
+    var onAddFood = focusedEl && focusedEl.id === 'btn-diary-add-food';
+    setSoftkeys('', onAddFood ? 'Add' : 'Edit', 'Options');
   } else if (panel.id === 'panel-search') {
     var label = state.tray.length ? ('Add (' + (state.tray.length + 1) + ')') : 'Add';
     setSoftkeys('Back', label, 'Tray');
@@ -460,9 +526,7 @@ document.addEventListener('keydown', function (e) {
 function handleSoftLeft() {
   var panel = activePanel();
   if (!panel) return;
-  if (panel.id === 'panel-diary') {
-    showSearchPanel();
-  } else if (panel.id === 'panel-search') {
+  if (panel.id === 'panel-search') {
     state.tray = [];
     showDiaryPanel();
   } else if (panel.id === 'panel-servings') {
@@ -472,6 +536,7 @@ function handleSoftLeft() {
   } else if (panel.id === 'panel-options') {
     showDiaryPanel();
   }
+  // panel-diary: no left-softkey action
 }
 
 function handleSoftRight() {
@@ -513,15 +578,16 @@ document.getElementById('sheet-overlay').addEventListener('click', closeSheet);
 
 function showDiaryPanel() {
   document.getElementById('input-diary-date').value = state.currentDate;
-  setSoftkeys('Search', 'Edit', 'Options');
-  // Build the diary list/Add-Food-button first, THEN show the panel — showPanel()
-  // auto-focuses the first nav-selectable element it finds, and if that ran
-  // before the DOM reflects the current date's entries, focus could land on
-  // the date input at the bottom instead of the first row / "+ Add Food".
+  // Build the diary list first, THEN show the panel — showPanel() auto-focuses
+  // the first nav-selectable element it finds, and if that ran before the DOM
+  // reflects the current date's entries, focus could land on the date input
+  // at the bottom instead of "+ Add Food" / the first row.
   renderDiary(function () {
     showPanel('panel-diary');
   });
 }
+
+document.getElementById('btn-diary-add-food').addEventListener('click', showSearchPanel);
 
 document.getElementById('input-diary-date').addEventListener('change', function (e) {
   state.currentDate = e.target.value || todayStr();
@@ -559,23 +625,6 @@ function renderDiary(callback) {
       li.addEventListener('click', function () { showServingsPanel(entry); });
       ul.appendChild(li);
     });
-
-    // Only exists in the DOM when the diary is actually empty — so it's never
-    // a hidden-but-still-focusable element, and it's what a fresh launch
-    // lands D-pad focus on instead of the date picker at the bottom (KaiOS's
-    // native date input takes over the full screen the moment it gets focus).
-    var existingAddFoodBtn = document.getElementById('btn-diary-add-food');
-    if (existingAddFoodBtn) existingAddFoodBtn.remove();
-    if (!entries.length) {
-      var addFoodBtn = document.createElement('button');
-      addFoodBtn.id = 'btn-diary-add-food';
-      addFoodBtn.type = 'button';
-      addFoodBtn.className = 'search-row add-new';
-      addFoodBtn.setAttribute('nav-selectable', 'true');
-      addFoodBtn.textContent = '+ Add Food';
-      addFoodBtn.addEventListener('click', showSearchPanel);
-      document.getElementById('diary-empty').insertAdjacentElement('afterend', addFoodBtn);
-    }
 
     renderDiarySummary(entries);
     if (callback) callback();
@@ -622,6 +671,11 @@ function renderSearchResults(query) {
   var q = query.trim().toLowerCase();
   var results = q ? state.allFoods.filter(function (f) {
     return f.name.toLowerCase().indexOf(q) !== -1;
+  }).sort(function (a, b) {
+    var countA = state.usageCounts[a.id] || 0;
+    var countB = state.usageCounts[b.id] || 0;
+    if (countB !== countA) return countB - countA; // most-used first
+    return a.name.localeCompare(b.name);            // then alphabetical
   }).slice(0, 50) : [];
 
   results.forEach(function (food) {
@@ -669,7 +723,12 @@ function addFocusedToTray() {
 function addFoodToDiaryDefault(food, callback) {
   var defaultServing = food.servings.filter(function (s) { return s.name === 'g'; })[0] || food.servings[0];
   var entry = buildDiaryEntry(food, defaultServing, defaultServing.quantity);
-  dbAddDiaryEntry(entry, callback || function () {});
+  dbAddDiaryEntry(entry, function (newId) {
+    state.usageCounts[food.id] = (state.usageCounts[food.id] || 0) + 1;
+    dbIncrementUsageCount(food.id, function () {
+      if (callback) callback(newId);
+    });
+  });
 }
 
 function commitFoodAndTray(food) {
@@ -822,9 +881,13 @@ function saveServingsEdit() {
 
 function deleteCurrentEntry() {
   if (!state.editingEntry) return;
+  var foodId = state.editingEntry.foodId;
   dbDeleteDiaryEntry(state.editingEntry.id, function () {
-    showDiaryPanel();
-    showStatus('Deleted', false);
+    state.usageCounts[foodId] = Math.max(0, (state.usageCounts[foodId] || 0) - 1);
+    dbDecrementUsageCount(foodId, function () {
+      showDiaryPanel();
+      showStatus('Deleted', false);
+    });
   });
 }
 
@@ -992,7 +1055,11 @@ openDB(function () {
         state.allFoods = foods;
         state.foodsById = {};
         foods.forEach(function (f) { state.foodsById[f.id] = f; });
-        showDiaryPanel();
+        dbGetAllUsageCounts(function (records) {
+          state.usageCounts = {};
+          records.forEach(function (r) { state.usageCounts[r.id] = r.count; });
+          showDiaryPanel();
+        });
       });
     }
   );

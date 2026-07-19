@@ -55,11 +55,16 @@ stupid_servings = [
     re.compile('None', re.IGNORECASE),
     re.compile(r'^\(.*', re.IGNORECASE),  # leading parenthesis are STUPID
     re.compile(r'^2 (shells|tortillas),.*(taco|seasoning)', re.IGNORECASE),  # i dont even understand these stupid taco servings
+    re.compile(r'container, nfs', re.IGNORECASE),  # not sure of the contianer? doesnt that mean, like you dont even know what youre measuring??
 ]
 stupid_foods = [
-    re.compile('Milk, Human', re.IGNORECASE),  # it doesnt even have any macros completely useless
-    re.compile('.*As Ingredient.*', re.IGNORECASE),
-    re.compile('.*Ns As To Part.*', re.IGNORECASE),
+    re.compile(r'Milk, Human', re.IGNORECASE),  # it doesnt even have any macros completely useless
+    re.compile(r'.*As Ingredient.*', re.IGNORECASE),
+    re.compile(r'.*Ns As To Part.*', re.IGNORECASE),
+    re.compile(r'Infant Formula.*', re.IGNORECASE),
+    re.compile(r'Baby Formula.*', re.IGNORECASE),
+    re.compile(r'.*\bns\b.*', re.IGNORECASE),
+    re.compile(r'.*\bnfs\b.*', re.IGNORECASE),
 ]
 acceptable_servings = [
     re.compile(r"^(g|ml)$", re.IGNORECASE),
@@ -101,6 +106,7 @@ servings_post_processing = [
     {'find': re.compile(r'(tbsp|tablespoon|tbp)s*\.*', re.IGNORECASE), 'replace': r'Tablespoons'}, # Tablespoons
     {'find': re.compile(r'(tsp|teaspoon|tbp)s*\.*', re.IGNORECASE), 'replace': r'teaspoons'}, # teaspoons
     {'find': re.compile(r'\s*\|.*$', re.IGNORECASE), 'replace': r''},
+    {'find': re.compile(r', nfs$', re.IGNORECASE), 'replace': r''},
 ]
 servings_post_processing_skip_these = [
     re.compile(r'^\.$', re.IGNORECASE),  # A single dot? really?

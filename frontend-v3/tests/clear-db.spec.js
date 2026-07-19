@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { mockDataHost, pressSoftKey } = require('./helpers');
+const { mockDataHost, pressSoftKey, goToSearchFromDiary } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
   await mockDataHost(page);
@@ -25,7 +25,7 @@ test('Clear Local DB opens a confirmation sheet with the expected copy', async (
 
 test('"No, do not delete" closes the sheet and keeps existing data', async ({ page }) => {
   // Log something first so we have data to prove survives.
-  await pressSoftKey(page, 'SoftLeft');
+  await goToSearchFromDiary(page);
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);
   await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();
@@ -43,7 +43,7 @@ test('"No, do not delete" closes the sheet and keeps existing data', async ({ pa
 });
 
 test('"Yes, delete the local DB" wipes IndexedDB and reloads to an empty app', async ({ page }) => {
-  await pressSoftKey(page, 'SoftLeft');
+  await goToSearchFromDiary(page);
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);
   await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();
