@@ -1,7 +1,9 @@
 'use strict';
 
 var DATA_HOST = 'https://calories.elliscode.com';
-var SUBMIT_URL = 'https://api.calories.elliscode.com/submit';
+var API_HOST = 'https://api.calories.elliscode.com';
+var SUBMIT_URL = API_HOST + '/submit';
+var PRESIGNED_POST_URL = API_HOST + '/presigned-post';
 var APP_VERSION = '1.0.0';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
@@ -979,22 +981,85 @@ function submitNewFood() {
   });
 }
 
-function submitNewFoodToApi(id, name, servingQty, servingName, calories, fat, carbs, protein, photo) {
-  var formData = new FormData();
-  formData.append('id', id);
-  formData.append('name', name);
-  formData.append('servingQuantity', servingQty);
-  formData.append('servingName', servingName);
-  formData.append('calories', calories);
-  formData.append('fat', fat);
-  formData.append('carbohydrates', carbs);
-  formData.append('protein', protein);
-  if (photo) formData.append('photo', photo);
+// Maps a File's declared type (falling back to its name's extension) to one
+// of the extensions the backend's /presigned-post whitelists. Returns null
+// if it can't confidently tell — the caller then just skips the photo
+// rather than guessing.
+var PHOTO_MIME_TO_EXTENSION = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp'
+};
+var PHOTO_ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
 
-  // Best-effort — the API doesn't exist yet, and even once it does, this
-  // must never block the local add above.
-  fetch(SUBMIT_URL, { method: 'POST', body: formData })
-    .catch(function (err) { console.log('New food submission failed (non-blocking)', err); });
+function getPhotoExtension(file) {
+  if (file.type && PHOTO_MIME_TO_EXTENSION[file.type]) return PHOTO_MIME_TO_EXTENSION[file.type];
+  var match = /\.([a-zA-Z0-9]+)$/.exec(file.name || '');
+  if (match) {
+    var ext = match[1].toLowerCase();
+    if (ext === 'jpeg') return 'jpg';
+    if (PHOTO_ALLOWED_EXTENSIONS.indexOf(ext) !== -1) return ext;
+  }
+  return null;
+}
+
+// The photo bypasses this Lambda entirely — it's uploaded straight to S3 via
+// a presigned POST URL the API hands out, keyed by the food's own GUID (not
+// a separately-generated name), so the photo and its DynamoDB record always
+// address by the same id. Only once that upload has actually succeeded (or
+// immediately, if there's no photo) does /submit get called with the food's
+// fields as plain JSON. The whole chain stays best-effort/non-blocking
+// relative to the local add above — a failure at any step is just logged.
+function submitNewFoodToApi(id, name, servingQty, servingName, calories, fat, carbs, protein, photo) {
+  var extension = photo ? getPhotoExtension(photo) : null;
+  var uploadStep = (photo && extension) ? uploadPhotoViaPresignedPost(id, extension, photo) : Promise.resolve(null);
+
+  uploadStep
+    .then(function (photoKey) {
+      return postSubmitJson(id, name, servingQty, servingName, calories, fat, carbs, protein, photoKey);
+    })
+    .catch(function (err) {
+      console.log('New food submission failed (non-blocking)', err);
+    });
+}
+
+function uploadPhotoViaPresignedPost(id, extension, photo) {
+  return fetch(PRESIGNED_POST_URL, { method: 'POST', body: JSON.stringify({ id: id, extension: extension }) })
+    .then(function (res) {
+      if (!res.ok) throw new Error('Could not get a presigned upload URL');
+      return res.json();
+    })
+    .then(function (presigned) {
+      var formData = new FormData();
+      Object.keys(presigned.fields).forEach(function (key) {
+        formData.append(key, presigned.fields[key]);
+      });
+      formData.append('file', photo); // must be appended last — S3's required presigned-POST form shape
+      return fetch(presigned.url, { method: 'POST', body: formData });
+    })
+    .then(function (uploadRes) {
+      if (!uploadRes.ok) throw new Error('Photo upload to S3 failed');
+      return id + '.' + extension;
+    });
+}
+
+function postSubmitJson(id, name, servingQty, servingName, calories, fat, carbs, protein, photoKey) {
+  var body = {
+    id: id,
+    name: name,
+    servingQuantity: servingQty,
+    servingName: servingName,
+    calories: calories,
+    fat: fat,
+    carbohydrates: carbs,
+    protein: protein
+  };
+  if (photoKey) body.photoKey = photoKey;
+  // No explicit Content-Type header — letting fetch default to text/plain
+  // for a plain string body keeps this a CORS-simple request (no preflight),
+  // same trick used by every other API call in this app.
+  return fetch(SUBMIT_URL, { method: 'POST', body: JSON.stringify(body) });
 }
 
 // ─── Screen: Options ──────────────────────────────────────────────────────────

@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Calorie Counter Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px;
+    background: #f3f0f5;
+    color: #111;
+  }
+  h1 { font-size: 18px; color: #6a0080; margin-bottom: 16px; }
+  .login { max-width: 360px; margin: 60px auto; }
+  .login label { display: block; margin: 12px 0; font-size: 14px; }
+  input {
+    font-size: 14px;
+    padding: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-top: 4px;
+  }
+  button {
+    font-size: 14px;
+    padding: 8px 14px;
+    margin-top: 8px;
+    cursor: pointer;
+    border: none;
+    border-radius: 4px;
+    background: #6a0080;
+    color: #fff;
+  }
+  button:hover { background: #85049f; }
+  #error { color: #c0392b; font-size: 13px; min-height: 18px; }
+
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  #export-btn { background: #1a8a4a; }
+  #export-btn:hover { background: #22a75c; }
+
+  .card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .card img {
+    width: 100%;
+    border-radius: 6px;
+    display: block;
+    object-fit: cover;
+    max-height: 320px;
+  }
+  .card-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .field label {
+    display: block;
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 2px;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .accept { background: #1a8a4a; flex: 1; }
+  .accept:hover { background: #22a75c; }
+  .reject { background: #c0392b; flex: 1; }
+  .reject:hover { background: #d9483a; }
+
+  #empty-state { color: #666; font-size: 14px; }
+
+  /* Desktop: photo on the left, fields stacked on the right */
+  @media (min-width: 700px) {
+    .card {
+      flex-direction: row;
+      align-items: flex-start;
+    }
+    .card-photo {
+      flex: 0 0 260px;
+    }
+    .card img { max-height: 260px; }
+    .card-fields {
+      flex: 1;
+    }
+  }
+</style>
+</head>
+<body>
+  <h1>Calorie Counter — Food Submission Review</h1>
+  <p id="error"></p>
+
+  <div class="login" id="generate-code" style="display:none;">
+    <form onsubmit="generateCode(event);">
+      <p>Enter the admin phone number to receive a log-in code.</p>
+      <label for="phone-number">Phone Number: <input type="tel" name="phone-number" id="phone-number" placeholder="XXXXXXXXXX"></label>
+      <button>Get Code</button>
+    </form>
+  </div>
+  <div class="login" id="submit-code" style="display:none;">
+    <form onsubmit="submitCode(event);">
+      <p>Enter the one-time code sent by text.</p>
+      <label for="one-time-code">One-time Code: <input type="tel" name="one-time-code" id="one-time-code" placeholder="XXXXXX" autocomplete="off"></label>
+      <button>Log In</button>
+    </form>
+  </div>
+
+  <div id="app" style="display:none;">
+    <div class="topbar">
+      <span id="pending-count"></span>
+      <button id="export-btn" onclick="exportToJson();">Export to JSON</button>
+    </div>
+    <div id="cards"></div>
+    <p id="empty-state" style="display:none;">Nothing pending review.</p>
+  </div>
+
+<script>
+const BASE_URL = 'https://api.calories.elliscode.com/admin';
+const CSRF_STORAGE_KEY = 'calorie-counter-admin-csrf-token';
+
+const generateCodeDiv = document.getElementById('generate-code');
+const submitCodeDiv = document.getElementById('submit-code');
+const appDiv = document.getElementById('app');
+const cardsDiv = document.getElementById('cards');
+const emptyStateEl = document.getElementById('empty-state');
+const pendingCountEl = document.getElementById('pending-count');
+const errorEl = document.getElementById('error');
+const phoneNumberInput = document.getElementById('phone-number');
+const oneTimeCodeInput = document.getElementById('one-time-code');
+
+let csrfToken = undefined;
+
+function loadCsrfToken() {
+  const stored = localStorage.getItem(CSRF_STORAGE_KEY);
+  if (/^[a-zA-Z0-9]{32}$/.test(stored)) csrfToken = stored;
+}
+
+function displayError(message) {
+  errorEl.innerText = message || '';
+}
+
+function hideAllScreens() {
+  generateCodeDiv.style.display = 'none';
+  submitCodeDiv.style.display = 'none';
+  appDiv.style.display = 'none';
+}
+
+async function changeUiBasedOnLoginState() {
+  try {
+    const response = await fetch(`${BASE_URL}/logged-in-check`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ csrf: csrfToken })
+    });
+    if (response.status >= 200 && response.status < 300) {
+      hideAllScreens();
+      appDiv.style.display = 'block';
+      loadPending();
+      return;
+    }
+  } catch {
+    // Network-level failure (offline, CORS, etc) — fall through to login.
+  }
+  hideAllScreens();
+  generateCodeDiv.style.display = 'block';
+}
+
+async function generateCode(event) {
+  event.preventDefault();
+  try {
+    const response = await fetch(`${BASE_URL}/otp`, {
+      method: 'POST',
+      body: JSON.stringify({ phone: phoneNumberInput.value })
+    });
+    if (response.status >= 200 && response.status < 300) {
+      displayError('');
+      hideAllScreens();
+      submitCodeDiv.style.display = 'block';
+      return;
+    }
+    const data = await response.json();
+    displayError(data.message);
+  } catch {
+    displayError('Error requesting a code, please check the phone number.');
+  }
+}
+
+async function submitCode(event) {
+  event.preventDefault();
+  try {
+    const response = await fetch(`${BASE_URL}/login`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ phone: phoneNumberInput.value, otp: oneTimeCodeInput.value })
+    });
+    if (response.status >= 200 && response.status < 300) {
+      csrfToken = response.headers.get('x-csrf-token');
+      localStorage.setItem(CSRF_STORAGE_KEY, csrfToken);
+      displayError('');
+      hideAllScreens();
+      appDiv.style.display = 'block';
+      loadPending();
+      return;
+    }
+    const data = await response.json();
+    displayError(data.message);
+  } catch {
+    displayError('Error logging in, please try again.');
+  }
+}
+
+async function loadPending() {
+  cardsDiv.innerHTML = '';
+  try {
+    const response = await fetch(`${BASE_URL}/pending`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ csrf: csrfToken })
+    });
+    if (response.status < 200 || response.status >= 300) {
+      displayError('Could not load pending submissions.');
+      return;
+    }
+    const data = await response.json();
+    const pending = data.pending || [];
+    pendingCountEl.innerText = pending.length + (pending.length === 1 ? ' item pending' : ' items pending');
+    emptyStateEl.style.display = pending.length ? 'none' : 'block';
+    pending.forEach(buildCard);
+  } catch {
+    displayError('Error loading pending submissions, please refresh.');
+  }
+}
+
+function makeField(container, key, label, value) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  const labelEl = document.createElement('label');
+  labelEl.innerText = label;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = value;
+  input.dataset.field = key;
+  wrap.appendChild(labelEl);
+  wrap.appendChild(input);
+  container.appendChild(wrap);
+  return input;
+}
+
+function buildCard(entry) {
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  if (entry.photoKey) {
+    const photoWrap = document.createElement('div');
+    photoWrap.className = 'card-photo';
+    const img = document.createElement('img');
+    img.alt = entry.name;
+    photoWrap.appendChild(img);
+    card.appendChild(photoWrap);
+    loadPhotoUrl(entry.photoKey, img);
+  }
+
+  const fields = document.createElement('div');
+  fields.className = 'card-fields';
+  const nameInput = makeField(fields, 'name', 'Name', entry.name);
+  const qtyInput = makeField(fields, 'servingQuantity', 'Serving size', entry.servingQuantity);
+  const servingNameInput = makeField(fields, 'servingName', 'Serving unit', entry.servingName);
+  const caloriesInput = makeField(fields, 'calories', 'Calories', entry.calories);
+  const fatInput = makeField(fields, 'fat', 'Fat (g)', entry.fat);
+  const carbsInput = makeField(fields, 'carbohydrates', 'Carbs (g)', entry.carbohydrates);
+  const proteinInput = makeField(fields, 'protein', 'Protein (g)', entry.protein);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.innerText = 'Accept';
+  acceptBtn.className = 'accept';
+  acceptBtn.addEventListener('click', function () {
+    reviewItem(entry.key2, true, card, {
+      name: nameInput.value,
+      servingQuantity: qtyInput.value,
+      servingName: servingNameInput.value,
+      calories: caloriesInput.value,
+      fat: fatInput.value,
+      carbohydrates: carbsInput.value,
+      protein: proteinInput.value
+    });
+  });
+  actions.appendChild(acceptBtn);
+
+  const rejectBtn = document.createElement('button');
+  rejectBtn.innerText = 'Reject';
+  rejectBtn.className = 'reject';
+  rejectBtn.addEventListener('click', function () {
+    reviewItem(entry.key2, false, card, {});
+  });
+  actions.appendChild(rejectBtn);
+
+  fields.appendChild(actions);
+  card.appendChild(fields);
+  cardsDiv.appendChild(card);
+}
+
+async function loadPhotoUrl(photoKey, imgEl) {
+  try {
+    const response = await fetch(`${BASE_URL}/presigned-get`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ csrf: csrfToken, photoKey: photoKey })
+    });
+    if (response.status < 200 || response.status >= 300) return;
+    const data = await response.json();
+    imgEl.src = data.url;
+  } catch {
+    // Non-fatal — the rest of the card (fields/actions) still works without a photo.
+  }
+}
+
+async function reviewItem(id, approved, cardEl, fieldValues) {
+  try {
+    const response = await fetch(`${BASE_URL}/review`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify(Object.assign({ csrf: csrfToken, id: id, approved: approved }, fieldValues))
+    });
+    if (response.status >= 200 && response.status < 300) {
+      cardEl.remove();
+      pendingCountEl.innerText = cardsDiv.children.length + (cardsDiv.children.length === 1 ? ' item pending' : ' items pending');
+      emptyStateEl.style.display = cardsDiv.children.length ? 'none' : 'block';
+      return;
+    }
+  } catch {}
+  displayError(approved ? 'Error accepting item, please try again.' : 'Error rejecting item, please try again.');
+}
+
+async function exportToJson() {
+  try {
+    const response = await fetch(`${BASE_URL}/export`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ csrf: csrfToken })
+    });
+    if (response.status < 200 || response.status >= 300) {
+      displayError('Could not export approved foods.');
+      return;
+    }
+    const foods = await response.json();
+    const blob = new Blob([JSON.stringify(foods)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `approved-foods-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    displayError('');
+  } catch {
+    displayError('Error exporting, please try again.');
+  }
+}
+
+loadCsrfToken();
+changeUiBasedOnLoginState();
+</script>
+</body>
+</html>

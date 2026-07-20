@@ -1,11 +1,9 @@
-import mimetypes
-import re
 import time
 from decimal import Decimal, InvalidOperation
 
-from .utils import format_response, parse_multipart, python_obj_to_dynamo_obj, dynamo, s3, TABLE_NAME, PHOTOS_BUCKET_NAME
+from .utils import format_response, parse_body, python_obj_to_dynamo_obj, dynamo, TABLE_NAME, GUID_REGEX
 
-GUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+SUBMISSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
 
 def _parse_decimal(value):
@@ -18,16 +16,20 @@ def _parse_decimal(value):
 
 
 def submit_food_route(event):
-    fields, photo = parse_multipart(event)
+    body = parse_body(event.get("body"))
 
-    food_id = (fields.get("id") or "").strip()
-    name = (fields.get("name") or "").strip()
-    serving_name = (fields.get("servingName") or "").strip()
-    serving_quantity = _parse_decimal(fields.get("servingQuantity"))
-    calories = _parse_decimal(fields.get("calories"))
-    fat = _parse_decimal(fields.get("fat")) or Decimal(0)
-    carbohydrates = _parse_decimal(fields.get("carbohydrates")) or Decimal(0)
-    protein = _parse_decimal(fields.get("protein")) or Decimal(0)
+    food_id = (body.get("id") or "").strip()
+    name = (body.get("name") or "").strip()
+    serving_name = (body.get("servingName") or "").strip()
+    serving_quantity = _parse_decimal(body.get("servingQuantity"))
+    calories = _parse_decimal(body.get("calories"))
+    fat = _parse_decimal(body.get("fat")) or Decimal(0)
+    carbohydrates = _parse_decimal(body.get("carbohydrates")) or Decimal(0)
+    protein = _parse_decimal(body.get("protein")) or Decimal(0)
+    # The client already knows this — its own presigned-POST upload (see
+    # calorie_api/presigned.py) used this exact key, f"{id}.{extension}".
+    # This route never touches S3 or the photo bytes at all.
+    photo_key = body.get("photoKey") or None
 
     if not GUID_REGEX.match(food_id):
         return format_response(event=event, http_code=400, body="A valid id is required")
@@ -39,17 +41,6 @@ def submit_food_route(event):
         return format_response(event=event, http_code=400, body="A valid servingQuantity is required")
     if calories is None:
         return format_response(event=event, http_code=400, body="A valid calories value is required")
-
-    photo_key = None
-    if photo and photo.get("bytes"):
-        extension = mimetypes.guess_extension(photo["content_type"]) or ""
-        photo_key = f"{food_id}{extension}"
-        s3.put_object(
-            Bucket=PHOTOS_BUCKET_NAME,
-            Key=photo_key,
-            Body=photo["bytes"],
-            ContentType=photo["content_type"],
-        )
 
     dynamo.put_item(
         TableName=TABLE_NAME,
@@ -67,6 +58,7 @@ def submit_food_route(event):
                 "photoKey": photo_key,
                 "status": "pending",
                 "submittedAt": int(time.time()),
+                "expiration": int(time.time()) + SUBMISSION_TTL_SECONDS,
             }
         ),
     )

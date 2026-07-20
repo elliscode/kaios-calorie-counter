@@ -1,8 +1,18 @@
 import traceback
 
 from calorie_api.logger import log
-from calorie_api.utils import path_equals, format_response, has_invalid_domain, get_request_metadata
+from calorie_api.utils import (
+    path_equals,
+    format_response,
+    has_invalid_domain,
+    get_request_metadata,
+    otp_route,
+    login_route,
+    logged_in_check_route,
+)
 from calorie_api.submit import submit_food_route
+from calorie_api.presigned import presigned_post_route, presigned_get_route
+from calorie_api.admin import get_pending_route, review_route, export_route
 
 
 def lambda_handler(event, context):
@@ -21,8 +31,28 @@ def lambda_handler(event, context):
 def route(event):
     if has_invalid_domain(event=event):
         return format_response(event=event, http_code=403, body={"message": "Forbidden"})
+
+    # Admin moderation routes — unscoped, checked alongside everything else
+    # (there's no versioning scheme in this API at all, unlike kaios-t9-wizard).
+    if path_equals(event=event, method="POST", path="/admin/otp"):
+        return otp_route(event)
+    if path_equals(event=event, method="POST", path="/admin/login"):
+        return login_route(event)
+    if path_equals(event=event, method="POST", path="/admin/logged-in-check"):
+        return logged_in_check_route(event)
+    if path_equals(event=event, method="POST", path="/admin/pending"):
+        return get_pending_route(event)
+    if path_equals(event=event, method="POST", path="/admin/review"):
+        return review_route(event)
+    if path_equals(event=event, method="POST", path="/admin/export"):
+        return export_route(event)
+    if path_equals(event=event, method="POST", path="/admin/presigned-get"):
+        return presigned_get_route(event)
+
     if path_equals(event=event, method="POST", path="/test"):
         return format_response(event=event, http_code=200, body={"status": "up"})
     if path_equals(event=event, method="POST", path="/submit"):
         return submit_food_route(event)
+    if path_equals(event=event, method="POST", path="/presigned-post"):
+        return presigned_post_route(event)
     return format_response(event=event, http_code=403, body={"message": "Forbidden"})
