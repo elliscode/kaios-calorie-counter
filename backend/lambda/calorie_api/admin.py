@@ -26,20 +26,42 @@ def _parse_decimal(value):
         return None
 
 
-@authenticate
-def get_pending_route(event, admin_phone, body):
+def _query_submitted_foods(filter_expression, expr_names=None, expr_values=None):
+    names = {"#key1": "key1"}
+    names.update(expr_names or {})
+    values = {":key1": "submitted_food"}
+    values.update(expr_values or {})
     result = dynamo.query(
         TableName=TABLE_NAME,
         KeyConditionExpression="#key1 = :key1",
-        FilterExpression="attribute_not_exists(approved)",
-        ExpressionAttributeNames={"#key1": "key1"},
-        ExpressionAttributeValues=python_obj_to_dynamo_obj({":key1": "submitted_food"}),
+        FilterExpression=filter_expression,
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=python_obj_to_dynamo_obj(values),
     )
-    pending = [
+    return [
         {k: decimal_to_number(v) for k, v in dynamo_obj_to_python_obj(item).items()}
         for item in result.get("Items", [])
     ]
-    return format_response(event=event, http_code=200, body={"pending": pending}, log_this=False)
+
+
+# Shared by get_pending_route (just to list them) and export_route (to
+# additionally mark them exported) — approved, and not yet exported.
+APPROVED_NOT_EXPORTED_FILTER = "#approved = :true AND (attribute_not_exists(#exported) OR #exported = :false)"
+APPROVED_NOT_EXPORTED_NAMES = {"#approved": "approved", "#exported": "exported"}
+APPROVED_NOT_EXPORTED_VALUES = {":true": True, ":false": False}
+
+
+@authenticate
+def get_pending_route(event, admin_phone, body):
+    pending = _query_submitted_foods("attribute_not_exists(approved)")
+    # Approved-but-not-yet-exported items stay visible (underneath the
+    # awaiting-review queue) so there's a record of what's about to go out
+    # next export — rejected (approved: false) and already-exported items
+    # are the only two states that ever disappear from this page for good.
+    approved = _query_submitted_foods(
+        APPROVED_NOT_EXPORTED_FILTER, APPROVED_NOT_EXPORTED_NAMES, APPROVED_NOT_EXPORTED_VALUES
+    )
+    return format_response(event=event, http_code=200, body={"pending": pending, "approved": approved}, log_this=False)
 
 
 @authenticate
@@ -94,14 +116,9 @@ def review_route(event, admin_phone, body):
 
 @authenticate
 def export_route(event, admin_phone, body):
-    result = dynamo.query(
-        TableName=TABLE_NAME,
-        KeyConditionExpression="#key1 = :key1",
-        FilterExpression="#approved = :true AND (attribute_not_exists(#exported) OR #exported = :false)",
-        ExpressionAttributeNames={"#key1": "key1", "#approved": "approved", "#exported": "exported"},
-        ExpressionAttributeValues=python_obj_to_dynamo_obj({":key1": "submitted_food", ":true": True, ":false": False}),
+    items = _query_submitted_foods(
+        APPROVED_NOT_EXPORTED_FILTER, APPROVED_NOT_EXPORTED_NAMES, APPROVED_NOT_EXPORTED_VALUES
     )
-    items = [dynamo_obj_to_python_obj(item) for item in result.get("Items", [])]
 
     exported_foods = []
     for item in items:
@@ -112,11 +129,11 @@ def export_route(event, admin_phone, body):
                 "servings": [
                     {
                         "name": item["servingName"],
-                        "quantity": decimal_to_number(item["servingQuantity"]),
-                        "calories": decimal_to_number(item["calories"]),
-                        "fat": decimal_to_number(item["fat"]),
-                        "carbohydrates": decimal_to_number(item["carbohydrates"]),
-                        "protein": decimal_to_number(item["protein"]),
+                        "quantity": item["servingQuantity"],
+                        "calories": item["calories"],
+                        "fat": item["fat"],
+                        "carbohydrates": item["carbohydrates"],
+                        "protein": item["protein"],
                     }
                 ],
             }

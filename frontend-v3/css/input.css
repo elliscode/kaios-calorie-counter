@@ -18,7 +18,7 @@
 
 .input-wrap input:focus,
 .input-wrap select:focus {
-  border-bottom-color: #6a0080;
+  border-bottom-color: #2E7D32;
 }
 
 .input-wrap label {
@@ -36,7 +36,7 @@
 .input-wrap.has-value label {
   top: 0;
   font-size: 11px;
-  color: #6a0080;
+  color: #2E7D32;
 }
 
 /* <select> has no placeholder/:placeholder-shown concept — it always shows
@@ -45,7 +45,7 @@
 .input-wrap-select label {
   top: 0;
   font-size: 11px;
-  color: #6a0080;
+  color: #2E7D32;
 }
 
 .input-wrap-select select {
@@ -65,7 +65,7 @@ body.dark .input-wrap label {
 body.dark .input-wrap input:not(:placeholder-shown) + label,
 body.dark .input-wrap input:focus + label,
 body.dark .input-wrap.has-value label {
-  color: #c77ddb;
+  color: #81C784;
 }
 
 /* Search box: plain, full-width, no floating label per spec */
@@ -82,7 +82,7 @@ body.dark .input-wrap.has-value label {
 }
 
 .search-input:focus {
-  border-bottom-color: #6a0080;
+  border-bottom-color: #2E7D32;
 }
 
 body.dark .search-input {
@@ -99,7 +99,7 @@ body.dark .search-input {
 .file-field label {
   display: block;
   font-size: 11px;
-  color: #6a0080;
+  color: #2E7D32;
   margin-bottom: 6px;
 }
 
@@ -110,7 +110,7 @@ body.dark .search-input {
 }
 
 body.dark .file-field label {
-  color: #c77ddb;
+  color: #81C784;
 }
 
 .submit-button {
@@ -122,7 +122,7 @@ body.dark .file-field label {
   font-weight: 600;
   text-transform: uppercase;
   color: #fff;
-  background: #6a0080;
+  background: #2E7D32;
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -130,9 +130,9 @@ body.dark .file-field label {
 }
 
 .submit-button[nav-selected="true"] {
-  background: #9b27af;
+  background: #388E3C;
 }
 
 body.dark .submit-button {
-  background: #9b27af;
+  background: #388E3C;
 }

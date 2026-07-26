@@ -22,11 +22,11 @@
   width: 5px;
   height: 14px;
   border-radius: 20%;
-  background: #6a0080;
+  background: #2E7D32;
 }
 
 body.dark .lds-spinner div:after {
-  background: #c77ddb;
+  background: #81C784;
 }
 
 .lds-spinner div:nth-child(1)  { transform: rotate(0deg);   animation-delay: -1.1s; }

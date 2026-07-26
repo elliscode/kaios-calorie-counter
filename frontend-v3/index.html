@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=1.0.0">
-  <link rel="stylesheet" href="css/header.css?v=1.0.0">
-  <link rel="stylesheet" href="css/softkey.css?v=1.0.0">
-  <link rel="stylesheet" href="css/input.css?v=1.0.0">
-  <link rel="stylesheet" href="css/list.css?v=1.0.0">
-  <link rel="stylesheet" href="css/sheet.css?v=1.0.0">
-  <link rel="stylesheet" href="css/loader.css?v=1.0.0">
+  <link rel="stylesheet" href="css/root.css?v=3.0.3">
+  <link rel="stylesheet" href="css/header.css?v=3.0.3">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.3">
+  <link rel="stylesheet" href="css/input.css?v=3.0.3">
+  <link rel="stylesheet" href="css/list.css?v=3.0.3">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.3">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.3">
 </head>
 <body>
   <div id="root">
@@ -190,6 +190,16 @@
             <span class="options-label">Version</span>
             <span class="options-value" id="opt-version"></span>
           </li>
+          <li class="options-row" id="opt-sync-error-row" nav-selectable="false" style="display:none;">
+            <span class="options-label">Last Sync Error</span>
+            <span class="options-value" id="opt-sync-error-value"></span>
+          </li>
+          <li class="options-row" id="opt-check-headers" nav-selectable="true">
+            <span class="options-label">Debug: Check Headers (fetch)</span>
+          </li>
+          <li class="options-row" id="opt-check-headers-xhr" nav-selectable="true">
+            <span class="options-label">Debug: Check Headers (XHR)</span>
+          </li>
           <li class="options-row options-row-danger" id="opt-clear-db" nav-selectable="true">
             <span class="options-label">Clear Local DB</span>
           </li>
@@ -220,6 +230,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=1.0.0"></script>
+  <script src="app.js?v=3.0.3"></script>
 </body>
 </html>

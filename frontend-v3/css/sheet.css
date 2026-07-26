@@ -19,8 +19,10 @@
   bottom: 30px; /* KaiOS: above softkey bar */
   left: 0;
   right: 0;
+  max-height: calc(100vh - 38px);
+  overflow-y: auto;
   background: #fff;
-  border-top: 2px solid #6a0080;
+  border-top: 2px solid #2E7D32;
   z-index: 15;
 }
 
@@ -56,6 +58,9 @@
   font-size: 12px;
   color: #666;
   line-height: 1.5;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 #sheet-ul {
@@ -77,16 +82,18 @@
     right: auto;
     width: 90%;
     max-width: 400px;
+    max-height: 80vh;
     transform: translate(-50%, -50%);
     border-top: none;
-    border: 2px solid #6a0080;
+    border: 2px solid #2E7D32;
     border-radius: 10px;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   }
 
   body.dark #sheet {
-    border-color: #9b27af;
+    border-color: #388E3C;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   }
 }
@@ -94,7 +101,7 @@
 /* Dark mode */
 body.dark #sheet {
   background: #1c1c1e;
-  border-top-color: #9b27af;
+  border-top-color: #388E3C;
 }
 
 body.dark #sheet-header {

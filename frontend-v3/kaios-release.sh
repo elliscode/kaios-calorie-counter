@@ -5,7 +5,9 @@ zip -r calorie-counter-${TIMESTAMP}.zip . \
   -x "*.md" \
   -x "*release.sh" \
   -x "tests/*" \
+  -x "test-results/*" \
   -x "package.json" \
   -x "package-lock.json" \
   -x "playwright.config.js" \
-  -x "node_modules/*"
+  -x "node_modules/*" \
+  -x "assets/banner.png"

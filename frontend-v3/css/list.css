@@ -52,7 +52,7 @@ body.dark .list-row-empty {
 }
 
 .food-row[nav-selected="true"] {
-  background: #9b27af;
+  background: #388E3C;
   color: #fff;
 }
 
@@ -85,13 +85,13 @@ body.dark .food-row {
 }
 
 .search-row[nav-selected="true"] {
-  background: #9b27af;
+  background: #388E3C;
   color: #fff;
 }
 
 .search-row.in-tray::after {
   content: ' ✓';
-  color: #9b27af;
+  color: #388E3C;
 }
 
 .search-row[nav-selected="true"].in-tray::after {
@@ -99,19 +99,19 @@ body.dark .food-row {
 }
 
 .search-row.add-new {
-  color: #6a0080;
+  color: #2E7D32;
   font-weight: 600;
   border-top: 1px solid #ddd;
   margin-top: 4px;
 }
 
 .search-row.add-new[nav-selected="true"] {
-  background: #9b27af;
+  background: #388E3C;
   color: #fff;
 }
 
 body.dark .search-row.add-new {
-  color: #c77ddb;
+  color: #81C784;
   border-top-color: #2e2e30;
 }
 
@@ -122,7 +122,7 @@ body.dark .search-row {
 /* === Summary table (Diary) === */
 .summary-table {
   margin-top: 10px;
-  border-top: 2px solid #6a0080;
+  border-top: 2px solid #2E7D32;
   padding-top: 4px;
 }
 
@@ -175,7 +175,7 @@ body.dark .nutrient-row {
 }
 
 .options-row[nav-selected="true"] {
-  background: #9b27af;
+  background: #388E3C;
   color: #fff;
 }
 
@@ -242,7 +242,7 @@ body.dark .options-row-danger[nav-selected="true"] {
 }
 
 .list-row[nav-selected="true"] {
-  background: #9b27af;
+  background: #388E3C;
   color: #fff;
 }
 

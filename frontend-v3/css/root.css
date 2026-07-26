@@ -10,7 +10,7 @@ html, body {
   overflow: auto;
   font-family: sans-serif;
   font-size: 14px;
-  background: #fff;
+  background: #F5F7F3;
   color: #111;
 }
 
@@ -80,7 +80,7 @@ html, body {
 .progress-bar-fill {
   height: 100%;
   width: 0%;
-  background: #6a0080;
+  background: #2E7D32;
   transition: width 0.15s linear;
 }
 
@@ -93,7 +93,7 @@ body.dark .progress-bar {
 }
 
 body.dark .progress-bar-fill {
-  background: #9b27af;
+  background: #388E3C;
 }
 
 .status-toast {
@@ -114,7 +114,7 @@ body.dark .progress-bar-fill {
 }
 
 .status-toast.info {
-  background: rgba(106, 0, 128, 0.85);
+  background: rgba(46, 125, 50, 0.85);
   color: #fff;
 }
 
@@ -179,7 +179,7 @@ body.dark #softkey {
 
 body.dark #sk-left,
 body.dark #sk-right {
-  color: #c77ddb;
+  color: #81C784;
 }
 
 body.dark #sk-center {

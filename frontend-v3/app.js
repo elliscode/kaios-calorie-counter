@@ -4,7 +4,7 @@ var DATA_HOST = 'https://calories.elliscode.com';
 var API_HOST = 'https://api.calories.elliscode.com';
 var SUBMIT_URL = API_HOST + '/submit';
 var PRESIGNED_POST_URL = API_HOST + '/presigned-post';
-var APP_VERSION = '1.0.0';
+var APP_VERSION = '3.0.3';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
 var NON_NUTRIENT_KEYS = ['id', 'date', 'foodId', 'foodName', 'servingName', 'quantity', 'name'];
@@ -51,6 +51,26 @@ function generateGuid() {
     var v = c === 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
   });
+}
+
+// ─── Last sync error (surfaced in Options — the only diagnostic tool we have
+// on real KaiOS 3.0 hardware, since ADB/remote devtools aren't available on
+// those devices) ────────────────────────────────────────────────────────────
+function setLastSyncError(msg) {
+  try {
+    if (msg) {
+      localStorage.setItem('lastSyncError', JSON.stringify({ message: msg, at: new Date().toISOString() }));
+    } else {
+      localStorage.removeItem('lastSyncError');
+    }
+  } catch (e) { /* localStorage unavailable — nothing we can do */ }
+}
+
+function getLastSyncError() {
+  try {
+    var raw = localStorage.getItem('lastSyncError');
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
 }
 
 var _statusTimer = null;
@@ -214,32 +234,46 @@ function dbDecrementUsageCount(foodId, callback) {
 
 // ─── Data sync (manifest.json + food files → IndexedDB) ──────────────────────
 
-// Reads a JSON response's body incrementally so download progress can be
-// reported as it comes in, rather than waiting on the whole response at once
-// (these food data files can be several MB). Falls back to a plain res.json()
-// if the runtime doesn't support streaming response bodies.
-function fetchJsonWithProgress(url, onProgress) {
-  return fetch(url).then(function (res) {
-    if (!res.body || !res.body.getReader) {
-      return res.json();
-    }
-    var totalStr = res.headers.get('Content-Length');
-    var total = totalStr ? parseInt(totalStr, 10) : 0;
-    var reader = res.body.getReader();
-    var received = 0;
-    var chunks = [];
-    function pump() {
-      return reader.read().then(function (result) {
-        if (result.done) {
-          return new Blob(chunks).text().then(function (text) { return JSON.parse(text); });
+// Fetch failures (offline, CORS-blocked, etc.) surface to script as a generic,
+// deliberately non-specific error — browsers withhold the real reason (e.g.
+// "blocked by CORS policy") from JS for security reasons and only print it to
+// the devtools console. On real KaiOS 3.0 hardware there's no console to read
+// (ADB is locked down on those devices), so the best we can capture here is
+// the HTTP status when we get one, or the browser's generic message otherwise.
+function describeFetchError(err) {
+  return (err && err.message) ? err.message : String(err);
+}
+
+// Uses XMLHttpRequest rather than fetch() — confirmed via the Options > Debug
+// button that this device's Gecko 84 build silently omits the Origin header
+// on fetch() GETs specifically (it sends it fine on fetch() POSTs), which
+// breaks CORS for every GET this app makes to the data CDN with no visible
+// error beyond a generic "NetworkError". XHR predates fetch() by years in
+// this engine lineage and doesn't have this gap. Also reports download
+// progress via xhr.onprogress, same purpose the old streaming-fetch version
+// served (these food data files can be several MB).
+function xhrGetJson(url, onProgress) {
+  return new Promise(function (resolve, reject) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.onprogress = function (e) {
+      if (onProgress) onProgress(e.lengthComputable ? Math.min(1, e.loaded / e.total) : null);
+    };
+    xhr.onload = function () {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (e) {
+          reject(new Error('Invalid JSON from ' + url));
         }
-        chunks.push(result.value);
-        received += result.value.length;
-        if (onProgress) onProgress(total ? Math.min(1, received / total) : null);
-        return pump();
-      });
-    }
-    return pump();
+      } else {
+        reject(new Error('HTTP ' + xhr.status + ' fetching ' + url));
+      }
+    };
+    xhr.onerror = function () {
+      reject(new Error('XHR network error fetching ' + url));
+    };
+    xhr.send();
   });
 }
 
@@ -247,30 +281,35 @@ function fetchJsonWithProgress(url, onProgress) {
 // onFileProgress(fraction) fires repeatedly while the current file streams in (fraction is
 // null if the server didn't send a Content-Length to compute a fraction from).
 function syncData(onFileStart, onFileProgress, callback) {
-  fetch(DATA_HOST + '/manifest.json')
-    .then(function (res) { return res.json(); })
+  xhrGetJson(DATA_HOST + '/manifest.json')
     .then(function (manifest) {
       dbGetSyncedFileIds(function (syncedIds) {
         var toFetch = (manifest.files || []).filter(function (f) {
           return syncedIds.indexOf(f.id) === -1;
         });
-        if (!toFetch.length) { callback(); return; }
+        if (!toFetch.length) { setLastSyncError(null); callback(); return; }
         fetchNext(0);
         function fetchNext(i) {
-          if (i >= toFetch.length) { callback(); return; }
+          if (i >= toFetch.length) { setLastSyncError(null); callback(); return; }
           var fileEntry = toFetch[i];
           onFileStart(i + 1, toFetch.length, fileEntry);
-          fetchJsonWithProgress(DATA_HOST + fileEntry.url, onFileProgress)
+          xhrGetJson(DATA_HOST + fileEntry.url, onFileProgress)
             .then(function (foodsArr) {
               dbBulkPutFoods(foodsArr, function () {
                 dbMarkFileSynced(fileEntry.id, function () { fetchNext(i + 1); });
               });
             })
-            .catch(function () { fetchNext(i + 1); });
+            .catch(function (err) {
+              setLastSyncError(fileEntry.url + ': ' + describeFetchError(err));
+              fetchNext(i + 1);
+            });
         }
       });
     })
-    .catch(function () { callback(); }); // offline-first: fall back to whatever's already cached
+    .catch(function (err) {
+      setLastSyncError('manifest.json: ' + describeFetchError(err));
+      callback();
+    }); // offline-first: fall back to whatever's already cached
 }
 
 // ─── Panel & Softkey ──────────────────────────────────────────────────────────
@@ -420,11 +459,18 @@ function openSheet(items, header) {
     document.getElementById('sk-center').textContent,
     document.getElementById('sk-right').textContent
   ];
-  document.getElementById('sheet').setAttribute('active', 'true');
+  var sheetEl = document.getElementById('sheet');
+  sheetEl.setAttribute('active', 'true');
   document.getElementById('sheet-overlay').setAttribute('active', 'true');
   setSoftkeys('Back', 'SELECT', '');
   var first = ul.querySelector('[nav-selectable="true"]');
   if (first) setFocus(first);
+  // setFocus()'s el.focus() call above triggers the browser's native
+  // scroll-into-view for the focused row — since that's usually the single
+  // "Dismiss" button sitting after a long note, it jumps straight to the
+  // bottom and hides the start of the message. Force it back to the top so
+  // long content (error text, debug dumps) is readable from the beginning.
+  sheetEl.scrollTop = 0;
 }
 
 function closeSheet() {
@@ -457,9 +503,22 @@ document.addEventListener('keydown', function (e) {
     document.body.classList.add('using-keyboard');
   }
   if (isSheetOpen()) {
+    // Sheets often show more content (long error/debug text) than fits in
+    // the visible area, but may only have one or two selectable rows (e.g.
+    // a single "Dismiss" button) — moveFocus() alone wouldn't let the D-pad
+    // reveal the rest, so up/down also nudge the sheet's own scroll position.
+    var SHEET_SCROLL_STEP = 48;
     switch (e.key) {
-      case 'ArrowUp':   e.preventDefault(); moveFocus('up');   break;
-      case 'ArrowDown': e.preventDefault(); moveFocus('down'); break;
+      case 'ArrowUp':
+        e.preventDefault();
+        moveFocus('up');
+        document.getElementById('sheet').scrollBy(0, -SHEET_SCROLL_STEP);
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        moveFocus('down');
+        document.getElementById('sheet').scrollBy(0, SHEET_SCROLL_STEP);
+        break;
       case 'Enter':     e.preventDefault(); interact(focused()); break;
       case 'SoftLeft':
       case 'Backspace': e.preventDefault(); closeSheet(); break;
@@ -1066,11 +1125,75 @@ function postSubmitJson(id, name, servingQty, servingName, calories, fat, carbs,
 
 function showOptionsPanel() {
   document.getElementById('opt-version').textContent = APP_VERSION;
+
+  var err = getLastSyncError();
+  var errRow = document.getElementById('opt-sync-error-row');
+  if (err) {
+    errRow.style.display = '';
+    errRow.setAttribute('nav-selectable', 'true');
+    document.getElementById('opt-sync-error-value').textContent = err.message;
+  } else {
+    errRow.style.display = 'none';
+    errRow.setAttribute('nav-selectable', 'false');
+  }
+
   showPanel('panel-options');
   setSoftkeys('Back', 'SELECT', '');
 }
 
 document.getElementById('opt-clear-db').addEventListener('click', confirmClearLocalDb);
+
+document.getElementById('opt-sync-error-row').addEventListener('click', function () {
+  var err = getLastSyncError();
+  if (!err) return;
+  openSheet(
+    [{ label: 'Dismiss', action: function () { closeSheet(); } }],
+    { title: 'Last Sync Error', note: err.at + ' — ' + err.message }
+  );
+});
+
+// Temporary diagnostic: hits the Lambda's throwaway /debug-headers GET route
+// (see backend/lambda/lambda_function.py) and shows back exactly what
+// headers this device's GET request actually arrived with — specifically
+// whether 'origin' is present. Confirmed via the fetch() variant that Gecko
+// 84 on real KaiOS 3.0 hardware omits Origin on fetch() GETs; the XHR variant
+// exists to check whether the older XMLHttpRequest API has the same gap.
+// Remove both once that's fully sorted out.
+function checkDebugHeaders(sendRequest) {
+  openSheet(
+    [{ label: 'Dismiss', action: function () { closeSheet(); } }],
+    { title: 'Checking…', note: 'Requesting ' + API_HOST + '/debug-headers' }
+  );
+  sendRequest()
+    .then(function (data) {
+      var headers = data.headers || {};
+      var hasOrigin = Object.prototype.hasOwnProperty.call(headers, 'origin');
+      var lines = 'origin present: ' + (hasOrigin ? ('yes (' + headers.origin + ')') : 'NO') + '\n\n' +
+        JSON.stringify(headers);
+      openSheet(
+        [{ label: 'Dismiss', action: function () { closeSheet(); } }],
+        { title: 'Request Headers', note: lines }
+      );
+    })
+    .catch(function (err) {
+      openSheet(
+        [{ label: 'Dismiss', action: function () { closeSheet(); } }],
+        { title: 'Request Headers', note: 'Request itself failed: ' + describeFetchError(err) }
+      );
+    });
+}
+
+document.getElementById('opt-check-headers').addEventListener('click', function () {
+  checkDebugHeaders(function () {
+    return fetch(API_HOST + '/debug-headers').then(function (res) { return res.json(); });
+  });
+});
+
+document.getElementById('opt-check-headers-xhr').addEventListener('click', function () {
+  checkDebugHeaders(function () {
+    return xhrGetJson(API_HOST + '/debug-headers');
+  });
+});
 
 function confirmClearLocalDb() {
   openSheet(

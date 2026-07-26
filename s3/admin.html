@@ -11,10 +11,11 @@
     max-width: 900px;
     margin: 0 auto;
     padding: 16px;
-    background: #f3f0f5;
+    background: #F5F7F3;
     color: #111;
   }
-  h1 { font-size: 18px; color: #6a0080; margin-bottom: 16px; }
+  h1 { font-size: 18px; color: #2E7D32; margin-bottom: 16px; }
+  h2 { font-size: 15px; color: #2E7D32; margin: 24px 0 12px; }
   .login { max-width: 360px; margin: 60px auto; }
   .login label { display: block; margin: 12px 0; font-size: 14px; }
   input {
@@ -33,10 +34,10 @@
     cursor: pointer;
     border: none;
     border-radius: 4px;
-    background: #6a0080;
+    background: #2E7D32;
     color: #fff;
   }
-  button:hover { background: #85049f; }
+  button:hover { background: #388E3C; }
   #error { color: #c0392b; font-size: 13px; min-height: 18px; }
 
   .topbar {
@@ -64,6 +65,12 @@
     display: block;
     object-fit: cover;
     max-height: 320px;
+    cursor: pointer;
+  }
+  .card img:fullscreen {
+    object-fit: contain;
+    max-height: none;
+    background: #000;
   }
   .card-fields {
     display: flex;
@@ -85,6 +92,28 @@
   .accept:hover { background: #22a75c; }
   .reject { background: #c0392b; flex: 1; }
   .reject:hover { background: #d9483a; }
+
+  /* Approved-but-not-yet-exported cards: read-only, visually distinct
+     (a green left border) from the editable awaiting-review cards above. */
+  .card.readonly {
+    background: #f4faf6;
+    border-left: 4px solid #1a8a4a;
+  }
+  .readonly-field {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 3px 0;
+    border-bottom: 1px solid #e5efe8;
+  }
+  .readonly-field .field-label { color: #666; }
+  .readonly-field .field-value { font-weight: 600; }
+
+  /* Time-until-deletion — appears on every card (editable or not), since
+     the 30-day TTL clock runs regardless of review status. */
+  .expiration-field { border-bottom: none; margin-top: 2px; }
+  .expiration-field .field-value.soon { color: #b8860b; }
+  .expiration-field .field-value.expired { color: #c0392b; }
 
   #empty-state { color: #666; font-size: 14px; }
 
@@ -130,6 +159,9 @@
     </div>
     <div id="cards"></div>
     <p id="empty-state" style="display:none;">Nothing pending review.</p>
+
+    <h2 id="approved-heading" style="display:none;">Approved, awaiting export</h2>
+    <div id="approved-cards"></div>
   </div>
 
 <script>
@@ -142,6 +174,8 @@ const appDiv = document.getElementById('app');
 const cardsDiv = document.getElementById('cards');
 const emptyStateEl = document.getElementById('empty-state');
 const pendingCountEl = document.getElementById('pending-count');
+const approvedHeadingEl = document.getElementById('approved-heading');
+const approvedCardsDiv = document.getElementById('approved-cards');
 const errorEl = document.getElementById('error');
 const phoneNumberInput = document.getElementById('phone-number');
 const oneTimeCodeInput = document.getElementById('one-time-code');
@@ -229,6 +263,7 @@ async function submitCode(event) {
 
 async function loadPending() {
   cardsDiv.innerHTML = '';
+  approvedCardsDiv.innerHTML = '';
   try {
     const response = await fetch(`${BASE_URL}/pending`, {
       method: 'POST',
@@ -241,9 +276,18 @@ async function loadPending() {
     }
     const data = await response.json();
     const pending = data.pending || [];
+    const approved = data.approved || [];
+
     pendingCountEl.innerText = pending.length + (pending.length === 1 ? ' item pending' : ' items pending');
     emptyStateEl.style.display = pending.length ? 'none' : 'block';
     pending.forEach(buildCard);
+
+    // Approved-but-not-yet-exported items — shown underneath, read-only,
+    // so there's a record of what's about to go out on the next export.
+    // Rejected (approved: false) and already-exported items never show up
+    // here at all.
+    approvedHeadingEl.style.display = approved.length ? 'block' : 'none';
+    approved.forEach(buildReadOnlyCard);
   } catch {
     displayError('Error loading pending submissions, please refresh.');
   }
@@ -264,19 +308,57 @@ function makeField(container, key, label, value) {
   return input;
 }
 
+// entry.expiration is the DynamoDB TTL attribute (unix seconds) set at
+// submission time and never extended by review/approval — the record (and
+// its photo, via the matching S3 lifecycle rule) is deleted on this same
+// schedule no matter what state it's in, so every card shows it.
+function formatTimeRemaining(expirationUnixSeconds) {
+  if (!expirationUnixSeconds) return { text: 'Unknown', urgency: '' };
+  const secondsLeft = expirationUnixSeconds - Date.now() / 1000;
+  if (secondsLeft <= 0) return { text: 'Expired (pending deletion)', urgency: 'expired' };
+
+  const days = Math.floor(secondsLeft / 86400);
+  const hours = Math.floor((secondsLeft % 86400) / 3600);
+  const minutes = Math.floor((secondsLeft % 3600) / 60);
+  let text;
+  if (days > 0) text = `${days}d ${hours}h`;
+  else if (hours > 0) text = `${hours}h ${minutes}m`;
+  else text = `${minutes}m`;
+  return { text: text, urgency: secondsLeft < 3 * 86400 ? 'soon' : '' };
+}
+
+function appendExpirationInfo(container, entry) {
+  const row = document.createElement('div');
+  row.className = 'readonly-field expiration-field';
+  const labelEl = document.createElement('span');
+  labelEl.className = 'field-label';
+  labelEl.innerText = 'Deletes from database in';
+  const valueEl = document.createElement('span');
+  const remaining = formatTimeRemaining(entry.expiration);
+  valueEl.className = 'field-value' + (remaining.urgency ? ' ' + remaining.urgency : '');
+  valueEl.innerText = remaining.text;
+  row.appendChild(labelEl);
+  row.appendChild(valueEl);
+  container.appendChild(row);
+}
+
+function appendPhotoIfPresent(card, entry) {
+  if (!entry.photoKey) return;
+  const photoWrap = document.createElement('div');
+  photoWrap.className = 'card-photo';
+  const img = document.createElement('img');
+  img.alt = entry.name;
+  img.title = 'Click to view fullscreen';
+  img.addEventListener('click', function () { openImageFullscreen(img); });
+  photoWrap.appendChild(img);
+  card.appendChild(photoWrap);
+  loadPhotoUrl(entry.photoKey, img);
+}
+
 function buildCard(entry) {
   const card = document.createElement('div');
   card.className = 'card';
-
-  if (entry.photoKey) {
-    const photoWrap = document.createElement('div');
-    photoWrap.className = 'card-photo';
-    const img = document.createElement('img');
-    img.alt = entry.name;
-    photoWrap.appendChild(img);
-    card.appendChild(photoWrap);
-    loadPhotoUrl(entry.photoKey, img);
-  }
+  appendPhotoIfPresent(card, entry);
 
   const fields = document.createElement('div');
   fields.className = 'card-fields';
@@ -287,6 +369,7 @@ function buildCard(entry) {
   const fatInput = makeField(fields, 'fat', 'Fat (g)', entry.fat);
   const carbsInput = makeField(fields, 'carbohydrates', 'Carbs (g)', entry.carbohydrates);
   const proteinInput = makeField(fields, 'protein', 'Protein (g)', entry.protein);
+  appendExpirationInfo(fields, entry);
 
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -295,7 +378,10 @@ function buildCard(entry) {
   acceptBtn.innerText = 'Accept';
   acceptBtn.className = 'accept';
   acceptBtn.addEventListener('click', function () {
-    reviewItem(entry.key2, true, card, {
+    // Merge the (possibly-edited) field values onto the original entry --
+    // carries photoKey/expiration/etc along too, so the card that moves into
+    // the approved section below is built from this alone, no re-fetch.
+    const updatedEntry = Object.assign({}, entry, {
       name: nameInput.value,
       servingQuantity: qtyInput.value,
       servingName: servingNameInput.value,
@@ -304,6 +390,7 @@ function buildCard(entry) {
       carbohydrates: carbsInput.value,
       protein: proteinInput.value
     });
+    reviewItem(entry.key2, true, card, updatedEntry);
   });
   actions.appendChild(acceptBtn);
 
@@ -311,13 +398,55 @@ function buildCard(entry) {
   rejectBtn.innerText = 'Reject';
   rejectBtn.className = 'reject';
   rejectBtn.addEventListener('click', function () {
-    reviewItem(entry.key2, false, card, {});
+    reviewItem(entry.key2, false, card, null);
   });
   actions.appendChild(rejectBtn);
 
   fields.appendChild(actions);
   card.appendChild(fields);
   cardsDiv.appendChild(card);
+}
+
+function makeReadOnlyField(container, label, value) {
+  const row = document.createElement('div');
+  row.className = 'readonly-field';
+  const labelEl = document.createElement('span');
+  labelEl.className = 'field-label';
+  labelEl.innerText = label;
+  const valueEl = document.createElement('span');
+  valueEl.className = 'field-value';
+  valueEl.innerText = value;
+  row.appendChild(labelEl);
+  row.appendChild(valueEl);
+  container.appendChild(row);
+}
+
+// Approved-but-not-yet-exported — display only, no Accept/Reject/editing.
+// Export already uses whatever's currently stored, so there's nothing here
+// for the admin to act on beyond seeing what's queued up.
+function buildReadOnlyCard(entry, prepend) {
+  const card = document.createElement('div');
+  card.className = 'card readonly';
+  appendPhotoIfPresent(card, entry);
+
+  const fields = document.createElement('div');
+  fields.className = 'card-fields';
+  makeReadOnlyField(fields, 'Name', entry.name);
+  makeReadOnlyField(fields, 'Serving size', entry.servingQuantity);
+  makeReadOnlyField(fields, 'Serving unit', entry.servingName);
+  makeReadOnlyField(fields, 'Calories', entry.calories);
+  makeReadOnlyField(fields, 'Fat (g)', entry.fat);
+  makeReadOnlyField(fields, 'Carbs (g)', entry.carbohydrates);
+  makeReadOnlyField(fields, 'Protein (g)', entry.protein);
+  appendExpirationInfo(fields, entry);
+  card.appendChild(fields);
+  if (prepend) approvedCardsDiv.prepend(card);
+  else approvedCardsDiv.appendChild(card);
+}
+
+function openImageFullscreen(imgEl) {
+  const request = imgEl.requestFullscreen || imgEl.webkitRequestFullscreen;
+  if (request) request.call(imgEl);
 }
 
 async function loadPhotoUrl(photoKey, imgEl) {
@@ -335,7 +464,21 @@ async function loadPhotoUrl(photoKey, imgEl) {
   }
 }
 
-async function reviewItem(id, approved, cardEl, fieldValues) {
+// updatedEntry is the full (possibly-edited) record on Accept, or null on
+// Reject -- Reject sends no corrected fields, matching the backend's own
+// "nothing to correct on a straight decline" behavior.
+async function reviewItem(id, approved, cardEl, updatedEntry) {
+  const fieldValues = updatedEntry
+    ? {
+        name: updatedEntry.name,
+        servingQuantity: updatedEntry.servingQuantity,
+        servingName: updatedEntry.servingName,
+        calories: updatedEntry.calories,
+        fat: updatedEntry.fat,
+        carbohydrates: updatedEntry.carbohydrates,
+        protein: updatedEntry.protein
+      }
+    : {};
   try {
     const response = await fetch(`${BASE_URL}/review`, {
       method: 'POST',
@@ -346,6 +489,12 @@ async function reviewItem(id, approved, cardEl, fieldValues) {
       cardEl.remove();
       pendingCountEl.innerText = cardsDiv.children.length + (cardsDiv.children.length === 1 ? ' item pending' : ' items pending');
       emptyStateEl.style.display = cardsDiv.children.length ? 'none' : 'block';
+      // Accept moves straight into the "Approved, awaiting export" section
+      // using what we already know -- no extra /admin/pending round-trip.
+      if (approved && updatedEntry) {
+        approvedHeadingEl.style.display = 'block';
+        buildReadOnlyCard(updatedEntry, true);
+      }
       return;
     }
   } catch {}

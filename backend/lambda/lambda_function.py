@@ -1,3 +1,4 @@
+import json
 import traceback
 
 from calorie_api.logger import log
@@ -25,10 +26,33 @@ def lambda_handler(event, context):
         return format_response(event=event, http_code=500, body="Internal server error")
 
 
+# Temporary diagnostic route: echoes back whatever headers this request
+# actually arrived with, so a real device can see for itself (via the Options
+# panel) whether its GET requests include an Origin header at all — bypasses
+# the normal domain/CORS gate entirely (both has_invalid_domain below and
+# format_response's own origin check) since the whole point is to work and
+# show something even when Origin is missing or doesn't match DOMAIN_NAMES.
+# Remove once the Gecko-omits-Origin-on-GET question is answered.
+def debug_headers_route(event):
+    headers = event.get("headers") or {}
+    log("debug-headers", headers)
+    return {
+        "statusCode": 200,
+        "body": json.dumps({"headers": headers}),
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Content-Type": "application/json",
+        },
+    }
+
+
 # Only using POST because I want to prevent CORS preflight checks — see
 # kaios-shared-list/backend/lambda/lambda_function.py for the fuller
 # explanation of why that's the case here too.
 def route(event):
+    if path_equals(event=event, method="GET", path="/debug-headers"):
+        return debug_headers_route(event)
+
     if has_invalid_domain(event=event):
         return format_response(event=event, http_code=403, body={"message": "Forbidden"})
 

@@ -48,7 +48,19 @@ Set these on the Lambda function itself (Configuration → Environment variables
 ### One-time AWS setup
 
 1. Create a DynamoDB table named `kaios-calorie-counter` — partition key `key1` (String), sort key `key2` (String). Enable **TTL** on it with `expiration` as the attribute name (used by `otp`/`token` records and by `/submit`'s 30-day-pending-review records).
-2. Confirm the private S3 bucket for submitted nutrition-facts photos exists (currently `daniel-townsend-kaios-calorie-counter-userspace`) — do **not** reuse the public static-app bucket. Add this bucket to the existing dedicated presigned-URL IAM identity's permissions (the one already used for other projects) rather than creating a new role.
+2. Confirm the private S3 bucket for submitted nutrition-facts photos exists (currently `daniel-townsend-kaios-calorie-counter-userspace`) — do **not** reuse the public static-app bucket. Add this bucket to the existing dedicated presigned-URL IAM identity's permissions (the one already used for other projects) rather than creating a new role. **Also set the bucket's own CORS configuration** (Permissions → Cross-origin resource sharing) — the photo upload goes straight from the browser to S3 via the presigned POST (bypassing the Lambda entirely), so without this the upload fails with a CORS error even though the presigned URL itself is valid:
+   ```json
+   [
+     {
+       "AllowedHeaders": ["*"],
+       "AllowedMethods": ["POST"],
+       "AllowedOrigins": ["https://calories.elliscode.com"],
+       "ExposeHeaders": ["ETag"],
+       "MaxAgeSeconds": 3000
+     }
+   ]
+   ```
+   Add the packaged KaiOS app's own origin to `AllowedOrigins` too, once it's known.
 3. Create a Lambda function (e.g. `calorie-counter-api-dev`), Python 3.14 runtime, with the environment variables listed above. Grant its own IAM role `dynamodb:PutItem`/`GetItem`/`UpdateItem`/`Query`/`DeleteItem` on the table and `sqs:SendMessage` on the SMS queue — it needs **no S3 permissions at all**, since every photo operation goes through the separate dedicated presigned credentials instead.
 4. Set up an API Gateway with an ANY method + proxy integration targeting this Lambda.
 5. Run `sh dev-release.sh` (or `prod-release.sh`) to deploy.
