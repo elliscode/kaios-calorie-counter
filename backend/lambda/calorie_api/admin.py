@@ -1,5 +1,4 @@
 import time
-from decimal import Decimal, InvalidOperation
 
 from .utils import (
     format_response,
@@ -8,22 +7,36 @@ from .utils import (
     python_obj_to_dynamo_obj,
     dynamo_obj_to_python_obj,
     decimal_to_number,
+    parse_servings,
     TABLE_NAME,
     GUID_REGEX,
 )
 
-# Every optional field review_route can correct, and how to validate it if
-# (and only if) the caller actually included it — mirrors submit.py's
-# required-field validation, just applied conditionally.
-OPTIONAL_TEXT_FIELDS = ["name", "servingName"]
-OPTIONAL_NUMERIC_FIELDS = ["servingQuantity", "calories", "fat", "carbohydrates", "protein"]
+# The only food-level (not serving-level) field review_route can correct —
+# "servings" is handled separately below since it's a whole list, not a
+# single scalar value like this.
+OPTIONAL_TEXT_FIELDS = ["name"]
 
 
-def _parse_decimal(value):
-    try:
-        return Decimal(str(value))
-    except InvalidOperation:
-        return None
+# Pre-multi-serving submissions were stored as flat servingQuantity/
+# servingName/calories/fat/carbohydrates/protein fields rather than a
+# "servings" list. Backfilling it here (read-time only, never written back)
+# means get_pending_route/export_route only ever have to deal with one
+# shape, regardless of how old a still-pending submission is.
+def _with_servings_backfill(item):
+    if "servings" not in item:
+        item["servings"] = [
+            {
+                "name": item.pop("servingName", None),
+                "quantity": item.pop("servingQuantity", None),
+                "calories": item.pop("calories", None),
+                "fat": item.pop("fat", 0),
+                "carbohydrates": item.pop("carbohydrates", 0),
+                "protein": item.pop("protein", 0),
+                "caffeine": item.pop("caffeine", 0),
+            }
+        ]
+    return item
 
 
 def _query_submitted_foods(filter_expression, expr_names=None, expr_values=None):
@@ -39,7 +52,7 @@ def _query_submitted_foods(filter_expression, expr_names=None, expr_values=None)
         ExpressionAttributeValues=python_obj_to_dynamo_obj(values),
     )
     return [
-        {k: decimal_to_number(v) for k, v in dynamo_obj_to_python_obj(item).items()}
+        _with_servings_backfill({k: decimal_to_number(v) for k, v in dynamo_obj_to_python_obj(item).items()})
         for item in result.get("Items", [])
     ]
 
@@ -83,12 +96,15 @@ def review_route(event, admin_phone, body):
                 return format_response(event=event, http_code=400, body=f"{field} cannot be empty if provided")
             updates[field] = value
 
-    for field in OPTIONAL_NUMERIC_FIELDS:
-        if field in body:
-            value = _parse_decimal(body.get(field))
-            if value is None or (field == "servingQuantity" and value <= 0):
-                return format_response(event=event, http_code=400, body=f"A valid {field} is required if provided")
-            updates[field] = value
+    if "servings" in body:
+        servings = parse_servings(body.get("servings"))
+        if servings is None:
+            return format_response(
+                event=event,
+                http_code=400,
+                body="Each serving needs a valid name, quantity, and calories",
+            )
+        updates["servings"] = servings
 
     # Every attribute aliased through a placeholder, not just DynamoDB's
     # known-reserved words (e.g. "name") — there are 500+ of them, so
@@ -122,22 +138,7 @@ def export_route(event, admin_phone, body):
 
     exported_foods = []
     for item in items:
-        exported_foods.append(
-            {
-                "id": item["key2"],
-                "name": item["name"],
-                "servings": [
-                    {
-                        "name": item["servingName"],
-                        "quantity": item["servingQuantity"],
-                        "calories": item["calories"],
-                        "fat": item["fat"],
-                        "carbohydrates": item["carbohydrates"],
-                        "protein": item["protein"],
-                    }
-                ],
-            }
-        )
+        exported_foods.append({"id": item["key2"], "name": item["name"], "servings": item["servings"]})
         dynamo.update_item(
             TableName=TABLE_NAME,
             Key=python_obj_to_dynamo_obj({"key1": "submitted_food", "key2": item["key2"]}),

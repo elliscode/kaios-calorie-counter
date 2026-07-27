@@ -12,7 +12,14 @@ test('boots and shows an empty diary for today', async ({ page }) => {
   await expect(page.locator('#sum-calories')).toHaveText('0');
   await expect(page.locator('#sum-caffeine')).toHaveText('0');
 
-  var today = new Date().toISOString().slice(0, 10);
+  // Mirrors app.js's own todayStr() (local date components) rather than
+  // toISOString() (UTC) -- the two disagree for several hours a day
+  // depending on timezone, which made this test flaky near the UTC
+  // day boundary.
+  var now = new Date();
+  var today = now.getFullYear() + '-' +
+    String(now.getMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0');
   await expect(page.locator('#input-diary-date')).toHaveValue(today);
 });
 

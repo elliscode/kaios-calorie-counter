@@ -3,7 +3,7 @@ import os
 import re
 import secrets
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl
 
 import boto3
@@ -146,15 +146,69 @@ def dynamo_obj_to_python_obj(dynamo_obj: dict) -> dict:
 def decimal_to_number(value):
     # dynamo_obj_to_python_obj deserializes every DynamoDB Number as Decimal,
     # which json.dumps can't encode — convert back to a plain int/float right
-    # before a value is going out over the wire.
+    # before a value is going out over the wire. Recurses into lists/dicts
+    # too (e.g. a food submission's "servings" list of maps), not just bare
+    # top-level values.
     if isinstance(value, Decimal):
         return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, list):
+        return [decimal_to_number(v) for v in value]
+    if isinstance(value, dict):
+        return {k: decimal_to_number(v) for k, v in value.items()}
     return value
 
 
 def python_obj_to_dynamo_obj(python_obj: dict) -> dict:
     serializer = TypeSerializer()
     return {k: serializer.serialize(v) for k, v in python_obj.items()}
+
+
+def parse_decimal(value):
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return None
+
+
+# Shared by submit.py (new submissions) and admin.py's review_route (admin
+# corrections) — a "serving" is always this same shape everywhere in the
+# app, from the local IndexedDB food records through to what gets exported.
+def parse_serving(raw):
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    quantity = parse_decimal(raw.get("quantity"))
+    calories = parse_decimal(raw.get("calories"))
+    fat = parse_decimal(raw.get("fat")) or Decimal(0)
+    carbohydrates = parse_decimal(raw.get("carbohydrates")) or Decimal(0)
+    protein = parse_decimal(raw.get("protein")) or Decimal(0)
+    # Only ever set by an admin during review, not by the submitting user —
+    # the "+ Add New Food" form has no caffeine field at all, deliberately
+    # (not worth trusting arbitrary user input for this one), so this is
+    # always 0 on a fresh submission until an admin fills it in.
+    caffeine = parse_decimal(raw.get("caffeine")) or Decimal(0)
+    if not name or quantity is None or quantity <= 0 or calories is None:
+        return None
+    return {
+        "name": name,
+        "quantity": quantity,
+        "calories": calories,
+        "fat": fat,
+        "carbohydrates": carbohydrates,
+        "protein": protein,
+        "caffeine": caffeine,
+    }
+
+
+def parse_servings(raw_list):
+    if not isinstance(raw_list, list) or not raw_list:
+        return None
+    parsed = [parse_serving(item) for item in raw_list]
+    if any(p is None for p in parsed):
+        return None
+    return parsed
 
 
 def create_id(length):

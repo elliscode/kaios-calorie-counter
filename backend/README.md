@@ -20,13 +20,13 @@ uv sync
 | Route | Purpose |
 |-------|---------|
 | `/test` | Health check — returns `{"status": "up"}` |
-| `/submit` | Accepts a new food submission from the app's "+ Add New Food" form as plain JSON (`id`, `name`, `servingQuantity`, `servingName`, `calories`, `fat`, `carbohydrates`, `protein`, optional `photoKey`), stores it in DynamoDB with `status: "pending"` and a 30-day TTL for manual review |
+| `/submit` | Accepts a new food submission from the app's "+ Add New Food" form as plain JSON (`id`, `name`, `servings` — a non-empty array of `{name, quantity, calories, fat, carbohydrates, protein}`, one per serving the user defined — optional `photoKey`), stores it in DynamoDB with `status: "pending"` and a 30-day TTL for manual review |
 | `/presigned-post` | Public — hands out a presigned S3 POST URL/fields so the app can upload a nutrition-facts photo **directly to S3**, bypassing this Lambda entirely. The object key is always `{id}.{extension}` (the food's own GUID), not a separately-generated name, so a submission's DynamoDB record and its photo always address by the same id. |
 | `/admin/otp` | Admin login step 1 — texts a one-time code to `ADMIN_PHONE` via the shared SQS-triggered Twilio Lambda |
 | `/admin/login` | Admin login step 2 — verifies the code, sets the session cookie + returns a CSRF token |
 | `/admin/logged-in-check` | Confirms the current session/cookie is still valid |
 | `/admin/pending` | Lists submitted foods still awaiting a decision (`approved` not yet set) |
-| `/admin/review` | Accepts or rejects a submission — `id` + `approved` required, every other field optional (only present ones get corrected) |
+| `/admin/review` | Accepts or rejects a submission — `id` + `approved` required; `name` and `servings` (the whole array, replacing it) are both optional corrections, only applied if present. Submissions from before this shape existed (flat `servingQuantity`/`servingName`/etc. fields) are read back with a `servings` array synthesized on the fly, so old and new submissions look the same to the admin page. |
 | `/admin/export` | Returns every approved-but-not-yet-exported submission as a JSON array in the exact shape of `s3/2026-07-18-base-foods.json`, then marks them `exported: true` so a repeat call returns nothing new |
 | `/admin/presigned-get` | Admin-only — presigned S3 GET (view + download) URLs for a submission's photo, since the photos bucket is private |
 

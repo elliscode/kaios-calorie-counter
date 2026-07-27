@@ -78,6 +78,69 @@ test('required fields: submitting without calories shows an error and adds nothi
   await expect(page.locator('.status-toast')).toHaveAttribute('visible', 'true');
 });
 
+test('center/Enter steps through fields ("Next") and only submits from the Submit button ("Submit")', async ({ page }) => {
+  await page.fill('#input-search', 'protein muffin');
+  await page.waitForTimeout(250);
+  await page.locator('#panel-search .search-row.add-new').click();
+  await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
+
+  // Starts on Name, softkey says "Next", not "Submit".
+  await expect(page.locator('#input-new-food-name')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#sk-center')).toHaveText('Next');
+
+  await page.locator('#input-new-food-name').fill('protein muffin');
+  await page.locator('#input-new-food-name').press('Enter');
+  await expect(page.locator('#input-new-food-serving-qty')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#sk-center')).toHaveText('Next');
+
+  // Pressing Enter on a field must never submit by itself.
+  await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
+
+  await page.locator('#input-new-food-serving-qty').fill('1');
+  await page.locator('#input-new-food-serving-qty').press('Enter');
+  await expect(page.locator('#input-new-food-serving-name')).toHaveAttribute('nav-selected', 'true');
+
+  await page.locator('#input-new-food-serving-name').fill('muffin');
+  await page.locator('#input-new-food-serving-name').press('Enter');
+  await expect(page.locator('#input-new-food-calories')).toHaveAttribute('nav-selected', 'true');
+
+  await page.locator('#input-new-food-calories').fill('310');
+  await page.locator('#input-new-food-calories').press('Enter');
+  await expect(page.locator('#input-new-food-fat')).toHaveAttribute('nav-selected', 'true');
+
+  await page.locator('#input-new-food-fat').fill('9');
+  await page.locator('#input-new-food-fat').press('Enter');
+  await expect(page.locator('#input-new-food-carbs')).toHaveAttribute('nav-selected', 'true');
+
+  await page.locator('#input-new-food-carbs').fill('40');
+  await page.locator('#input-new-food-carbs').press('Enter');
+  await expect(page.locator('#input-new-food-protein')).toHaveAttribute('nav-selected', 'true');
+
+  await page.locator('#input-new-food-protein').fill('20');
+  await page.locator('#input-new-food-protein').press('Enter');
+  // Next stop is "Add additional serving" (photo now sits after it, right
+  // before Submit), still "Next", still hasn't submitted.
+  await expect(page.locator('#btn-add-extra-serving')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#sk-center')).toHaveText('Next');
+  await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
+
+  // Arrow past that onto the photo file field — still "Next", still hasn't submitted.
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#input-new-food-photo')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#sk-center')).toHaveText('Next');
+  await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
+
+  // Arrow past that onto Submit — label flips to "Submit".
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#btn-new-food-submit')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#sk-center')).toHaveText('Submit');
+
+  // Only now does center actually submit.
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.food-row-name')).toHaveText('protein muffin');
+});
+
 test('left softkey discards the form and returns to Search with its prior results intact', async ({ page }) => {
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);

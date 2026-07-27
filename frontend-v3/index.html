@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.3">
-  <link rel="stylesheet" href="css/header.css?v=3.0.3">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.3">
-  <link rel="stylesheet" href="css/input.css?v=3.0.3">
-  <link rel="stylesheet" href="css/list.css?v=3.0.3">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.3">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.3">
+  <link rel="stylesheet" href="css/root.css?v=3.0.5">
+  <link rel="stylesheet" href="css/header.css?v=3.0.5">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.5">
+  <link rel="stylesheet" href="css/input.css?v=3.0.5">
+  <link rel="stylesheet" href="css/list.css?v=3.0.5">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.5">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.5">
 </head>
 <body>
   <div id="root">
@@ -67,14 +67,14 @@
             <span class="summary-label">Total Protein</span>
             <span class="summary-value"><span id="sum-protein">0</span> g</span>
           </div>
-          <div class="summary-row">
+          <div class="summary-row" id="row-sum-caffeine">
             <span class="summary-label">Total Caffeine</span>
             <span class="summary-value"><span id="sum-caffeine">0</span> mg</span>
           </div>
         </div>
 
-        <div class="input-wrap">
-          <input id="input-diary-date" type="date" nav-selectable="true">
+        <div class="input-wrap" id="wrap-diary-date" nav-selectable="true">
+          <input id="input-diary-date" type="date">
           <label for="input-diary-date">Date</label>
         </div>
       </div>
@@ -101,8 +101,8 @@
           <input id="input-serving-qty" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
           <label for="input-serving-qty">Serving size</label>
         </div>
-        <div class="input-wrap input-wrap-select">
-          <select id="input-serving-name" nav-selectable="true"></select>
+        <div class="input-wrap input-wrap-select" id="wrap-serving-name" nav-selectable="true">
+          <select id="input-serving-name"></select>
           <label for="input-serving-name">Serving</label>
         </div>
 
@@ -123,7 +123,7 @@
             <span class="summary-label">Protein</span>
             <span class="summary-value"><span id="serv-protein">0</span> g</span>
           </div>
-          <div class="summary-row">
+          <div class="summary-row" id="row-serv-caffeine">
             <span class="summary-label">Caffeine</span>
             <span class="summary-value"><span id="serv-caffeine">0</span> mg</span>
           </div>
@@ -170,6 +170,11 @@
           <label for="input-new-food-protein">Protein (g)</label>
         </div>
 
+        <div id="extra-servings-container"></div>
+
+        <p class="optional-label">(optional)</p>
+        <button id="btn-add-extra-serving" class="secondary-button" type="button" nav-selectable="true">Add additional serving</button>
+
         <div class="file-field">
           <label for="input-new-food-photo">Nutrition facts photo</label>
           <input id="input-new-food-photo" type="file" accept="image/*" nav-selectable="true">
@@ -189,6 +194,10 @@
           <li class="options-row" nav-selectable="true">
             <span class="options-label">Version</span>
             <span class="options-value" id="opt-version"></span>
+          </li>
+          <li class="options-row" id="opt-show-caffeine" nav-selectable="true">
+            <span class="options-label">Show Caffeine</span>
+            <span class="options-value" id="opt-show-caffeine-value"></span>
           </li>
           <li class="options-row" id="opt-sync-error-row" nav-selectable="false" style="display:none;">
             <span class="options-label">Last Sync Error</span>
@@ -230,6 +239,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=3.0.3"></script>
+  <script src="app.js?v=3.0.5"></script>
 </body>
 </html>

@@ -21,6 +21,32 @@
   border-bottom-color: #2E7D32;
 }
 
+/* D-pad selection halo — the border-bottom color change above is too subtle
+   to read at a glance on a small screen, so nav-selected fields also get a
+   full glowing ring around the whole control. */
+.input-wrap input[nav-selected="true"],
+.input-wrap select[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.3);
+  border-radius: 3px;
+}
+
+body.dark .input-wrap input[nav-selected="true"],
+body.dark .input-wrap select[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.35);
+}
+
+/* Date/select fields: nav-selectable lives on the wrapper div itself (see
+   wireFocusForwardingWrapper in app.js), not the native control, so the
+   halo goes on the wrapper here instead of the input/select rule above. */
+.input-wrap[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.3);
+  border-radius: 3px;
+}
+
+body.dark .input-wrap[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.35);
+}
+
 .input-wrap label {
   position: absolute;
   left: 0;
@@ -113,6 +139,108 @@ body.dark .file-field label {
   color: #81C784;
 }
 
+.file-field input[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.3);
+  border-radius: 3px;
+}
+
+body.dark .file-field input[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.35);
+}
+
+/* Secondary/outline button — same shape language as .submit-button but
+   visually lighter-weight: outline only, page background showing through,
+   smaller footprint. Used for optional, non-primary actions like adding an
+   extra serving. */
+.secondary-button {
+  display: block;
+  width: 100%;
+  margin: 16px 4px 0;
+  padding: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #2E7D32;
+  background: transparent;
+  border: 2px solid #2E7D32;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+}
+
+.secondary-button[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.3);
+}
+
+body.dark .secondary-button {
+  color: #81C784;
+  border-color: #81C784;
+}
+
+body.dark .secondary-button[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.35);
+}
+
+.extra-serving-block {
+  margin: 20px 4px 0;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+
+body.dark .extra-serving-block {
+  border-top-color: #2e2e30;
+}
+
+.extra-serving-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #666;
+}
+
+body.dark .extra-serving-title {
+  color: #8b8b93;
+}
+
+.remove-serving-btn {
+  display: block;
+  background: none;
+  border: none;
+  color: #c0392b;
+  font-size: 12px;
+  padding: 4px 6px;
+  margin-top: 8px;
+  cursor: pointer;
+  outline: none;
+}
+
+.remove-serving-btn[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.3);
+  border-radius: 3px;
+}
+
+body.dark .remove-serving-btn {
+  color: #e57373;
+}
+
+body.dark .remove-serving-btn[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(229, 115, 115, 0.35);
+}
+
+/* "(optional)" caption above "Add additional serving" — same visual
+   language as the file-field's own label above its control. */
+.optional-label {
+  display: block;
+  font-size: 11px;
+  color: #2E7D32;
+  margin: 16px 4px 6px;
+}
+
+body.dark .optional-label {
+  color: #81C784;
+}
+
 .submit-button {
   display: block;
   width: 100%;
@@ -131,8 +259,13 @@ body.dark .file-field label {
 
 .submit-button[nav-selected="true"] {
   background: #388E3C;
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.4);
 }
 
 body.dark .submit-button {
   background: #388E3C;
+}
+
+body.dark .submit-button[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.45);
 }
