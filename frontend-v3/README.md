@@ -70,3 +70,16 @@ npx playwright test
 ```
 
 Tests intercept `DATA_HOST` requests with `page.route()` and serve `tests/fixtures/manifest.json` / `sample-foods.json` — no live network calls, since the production data host isn't required to be up for the suite to pass.
+
+## Kaios Sumbission Fields
+
+### Known Issues
+
+No known issues at this time
+
+### Simple Test Report
+
+1. Open the app, observe the food databases get downloaded on initial opening
+2. Add a food by pressing "+ Add Food"
+3. Search for a food by typing in the search bar
+4. Use the arrow keys up and down to pick a food, press select to add it
