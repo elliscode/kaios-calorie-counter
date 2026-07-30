@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.6">
-  <link rel="stylesheet" href="css/header.css?v=3.0.6">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.6">
-  <link rel="stylesheet" href="css/input.css?v=3.0.6">
-  <link rel="stylesheet" href="css/list.css?v=3.0.6">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.6">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.6">
+  <link rel="stylesheet" href="css/root.css?v=3.0.7">
+  <link rel="stylesheet" href="css/header.css?v=3.0.7">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.7">
+  <link rel="stylesheet" href="css/input.css?v=3.0.7">
+  <link rel="stylesheet" href="css/list.css?v=3.0.7">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.7">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.7">
 </head>
 <body>
   <div id="root">
@@ -181,6 +181,12 @@
           <label for="input-new-food-protein">Protein (g)</label>
         </div>
 
+        <button id="btn-new-food-submit" class="submit-button" type="button" nav-selectable="true">Submit</button>
+
+        <!-- Advanced/optional — extra servings and a nutrition-facts photo.
+             Deliberately placed after Submit, not before: screen space is
+             scarce and the default path for most people is just Submit,
+             not filling in more detail than a basic entry needs. -->
         <div id="extra-servings-container"></div>
 
         <p class="optional-label">(optional)</p>
@@ -191,7 +197,10 @@
           <input id="input-new-food-photo" type="file" accept="image/*" nav-selectable="true">
         </div>
 
-        <button id="btn-new-food-submit" class="submit-button" type="button" nav-selectable="true">Submit</button>
+        <!-- Same action as the Submit button above — repeated here so
+             anyone who scrolls down into the optional stuff doesn't have to
+             scroll all the way back up just to submit. -->
+        <button id="btn-new-food-submit-bottom" class="submit-button" type="button" nav-selectable="true">Submit</button>
       </div>
     </div>
 
@@ -305,6 +314,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=3.0.6"></script>
+  <script src="app.js?v=3.0.7"></script>
 </body>
 </html>

@@ -50,8 +50,12 @@
   text-overflow: ellipsis;
 }
 
-@media (min-width: 241px) {
+/* TEMPORARY DEBUG: normally hidden above KaiOS width (241px+) since real
+   phones/browsers there have no softkeys to label — commented out for now
+   so the softkey bar (and its Options/Login/My Foods access) stays reachable
+   on a desktop browser during testing. Restore this before shipping. */
+/* @media (min-width: 241px) {
   #softkey {
     display: none;
   }
-}
+} */

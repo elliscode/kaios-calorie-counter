@@ -16,7 +16,7 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.6';
+var APP_VERSION = '3.0.7';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
 var NON_NUTRIENT_KEYS = ['id', 'date', 'foodId', 'foodName', 'servingName', 'quantity', 'name'];
@@ -1086,7 +1086,7 @@ function updateSoftkeysForFocus() {
   } else if (panel.id === 'panel-servings') {
     setSoftkeys('Back', 'Save', 'Delete');
   } else if (panel.id === 'panel-new-food') {
-    var onSubmitBtn = focused() && focused().id === 'btn-new-food-submit';
+    var onSubmitBtn = isNewFoodSubmitBtn(focused());
     setSoftkeys('Back', onSubmitBtn ? 'Submit' : 'Next', '');
   } else if (panel.id === 'panel-options') {
     setSoftkeys('Back', 'SELECT', '');
@@ -1788,15 +1788,25 @@ var NEW_FOOD_NUMERIC_FIELDS = [
   'input-new-food-protein'
 ];
 
+// Two Submit buttons exist on this panel — one right after Protein (the
+// fast path for a basic entry), one at the very bottom after the optional
+// extra-servings/photo section (so scrolling down into that doesn't mean
+// scrolling all the way back up just to submit). Both do the exact same
+// thing, so anywhere the code needs to know "is focus on Submit", it needs
+// to check both ids.
+function isNewFoodSubmitBtn(el) {
+  return !!el && (el.id === 'btn-new-food-submit' || el.id === 'btn-new-food-submit-bottom');
+}
+
 // Center/Enter on this panel should step through the fields one at a time —
-// only actually submitting once focus has reached the Submit button itself
+// only actually submitting once focus has reached a Submit button itself
 // (see updateSoftkeysForFocus(), which shows "Next" until then). Shared by
 // both the physical-key path (wireAdvanceOnEnter, used for both the static
 // fields and any dynamically-added extra-serving fields) and the on-screen
 // center softkey click handler.
 function newFoodCenterAction() {
   var el = focused();
-  if (el && el.id === 'btn-new-food-submit') {
+  if (isNewFoodSubmitBtn(el)) {
     submitNewFood();
   } else if (el && !isTextInput(el)) {
     // e.g. the photo file input — center should open its native picker,
@@ -1838,6 +1848,7 @@ NEW_FOOD_NUMERIC_FIELDS.concat(['input-new-food-name', 'input-new-food-serving-n
 });
 
 document.getElementById('btn-new-food-submit').addEventListener('click', submitNewFood);
+document.getElementById('btn-new-food-submit-bottom').addEventListener('click', submitNewFood);
 
 // ─── Extra (optional) servings ────────────────────────────────────────────
 //
