@@ -48,6 +48,37 @@ html, body {
   line-height: 1.4;
 }
 
+/* Link-styled button — e.g. the Login screen's "What do we do with your
+   email?" — same visual language as this app's other green accents. */
+.hint-link {
+  display: block;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: 4px 4px 0;
+  font-size: 12px;
+  color: #2E7D32;
+  text-decoration: underline;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hint-link[nav-selected="true"] {
+  background: #2E7D32;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 3px;
+}
+
+body.dark .hint-link {
+  color: #81C784;
+}
+
+body.dark .hint-link[nav-selected="true"] {
+  background: #388E3C;
+  color: #fff;
+}
+
 /* === Loading panel === */
 .loading-wrap {
   padding: 24px 8px;

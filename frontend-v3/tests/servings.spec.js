@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
 test('opening a diary row shows its current serving and nutrient breakdown', async ({ page }) => {
   await page.locator('.food-row').click();
   await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
-  await expect(page.locator('#servings-title')).toHaveText('Apple, Raw');
+  await expect(page.locator('#servings-food-name')).toHaveText('Apple, Raw');
   await expect(page.locator('#input-serving-qty')).toHaveValue('100');
   await expect(page.locator('#input-serving-name')).toHaveValue('g');
   await expect(page.locator('#serv-calories')).toHaveText('52');

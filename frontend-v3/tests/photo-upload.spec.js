@@ -3,6 +3,19 @@ const { mockDataHost, goToSearchFromDiary } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
   await mockDataHost(page);
+  // /submit and /presigned-post now require a logged-in session — seed one
+  // before app.js's first script tick reads localStorage, same technique
+  // used to seed any other pre-existing local state in these tests.
+  await page.addInitScript(() => {
+    localStorage.setItem('csrf', 'test-csrf-token');
+    localStorage.setItem('everLoggedIn', 'true');
+  });
+  // These tests aren't exercising the sync engine (see sync.spec.js) — abort
+  // it here so a successful /submit's follow-up syncFoods() call doesn't
+  // leave a real, unmocked network request hanging in the background.
+  await page.route('https://api.calories.elliscode.com/sync/**', function (route) {
+    route.abort();
+  });
   await page.goto('/');
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
 });

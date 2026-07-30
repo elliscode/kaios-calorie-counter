@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -38,6 +41,21 @@ ADMIN_COOKIE_NAME = "calorie-counter-admin-token"
 # by the browser on both.
 ADMIN_COOKIE_DOMAIN = ".calories.elliscode.com"
 
+# End-user accounts (see find_or_create_user_id / authenticate_user below) —
+# email+OTP login, a separate identity system from the single hardcoded
+# admin above. Same cookie domain wildcard, distinct cookie name so the two
+# sessions never collide.
+USER_COOKIE_NAME = "calorie-counter-user-token"
+USER_COOKIE_DOMAIN = ADMIN_COOKIE_DOMAIN
+SES_REGION = os.environ.get("SES_REGION", "us-east-1")
+SES_SENDER_EMAIL = os.environ.get("SES_SENDER_EMAIL")
+SES_REPLY_TO_EMAIL = os.environ.get("SES_REPLY_TO_EMAIL")
+SES_TEMPLATE_NAME = os.environ.get("SES_TEMPLATE_NAME")
+# Does double duty, matching kaios-shared-list's convention: the HMAC key
+# for hash_email below, and the symmetric key for encrypt_field/decrypt_field
+# on every synced user_foods/user_diary/user_preferences record.
+ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")
+
 digits = "0123456789"
 lowercase_letters = "abcdefghijklmnopqrstuvwxyz"
 uppercase_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -48,6 +66,7 @@ GUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 
 dynamo = boto3.client("dynamodb")
 sqs = boto3.client("sqs")
+ses = boto3.client("ses", region_name=SES_REGION)
 
 
 def get_presigned_s3_client():
@@ -213,6 +232,64 @@ def parse_servings(raw_list):
 
 def create_id(length):
     return "".join(secrets.choice(digits + lowercase_letters + uppercase_letters) for i in range(length))
+
+
+# --- Field-level encryption for synced user data ----------------------------
+# Ported from kaios-shared-list/backend/lambda/shared_list/utils.py — a
+# lightweight, stdlib-only cipher (SHA256-counter-mode keystream XOR, random
+# 16-byte nonce per record). This is deliberately not a hardened scheme —
+# anyone with ENCRYPTION_KEY and this code can trivially decrypt, same as the
+# source project. The goal is keeping a user's own diary/foods/settings out
+# of casual view in the DynamoDB console, not withstanding a determined
+# attacker with Lambda access.
+def _keystream(key_bytes, nonce, length):
+    stream = b""
+    counter = 0
+    while len(stream) < length:
+        stream += hashlib.sha256(key_bytes + nonce + counter.to_bytes(4, "big")).digest()
+        counter += 1
+    return stream[:length]
+
+
+def encrypt_field(value):
+    key_bytes = bytes.fromhex(ENCRYPTION_KEY)
+    payload = (value if isinstance(value, str) else json.dumps(value)).encode()
+    nonce = secrets.token_bytes(16)
+    ciphertext = bytes(a ^ b for a, b in zip(payload, _keystream(key_bytes, nonce, len(payload))))
+    return base64.b64encode(nonce + ciphertext).decode()
+
+
+def decrypt_field(encrypted, as_json=False):
+    key_bytes = bytes.fromhex(ENCRYPTION_KEY)
+    data = base64.b64decode(encrypted)
+    nonce, ciphertext = data[:16], data[16:]
+    plaintext = bytes(a ^ b for a, b in zip(ciphertext, _keystream(key_bytes, nonce, len(ciphertext)))).decode()
+    return json.loads(plaintext) if as_json else plaintext
+
+
+def hash_email(email):
+    return hmac.new(ENCRYPTION_KEY.encode(), email.strip().lower().encode(), hashlib.sha256).hexdigest()
+
+
+# Shared by submit.py (dual-write on submission) and sync.py (every sync
+# route) — a user's foods/diary-per-date/preferences are each stored as one
+# DynamoDB item holding a single opaque "data" attribute (see encrypt_field
+# above), not a native map, so nothing readable ever sits in the table.
+def load_encrypted_collection(key1, key2):
+    result = dynamo.get_item(
+        Key=python_obj_to_dynamo_obj({"key1": key1, "key2": key2}),
+        TableName=TABLE_NAME,
+    )
+    if "Item" not in result:
+        return {}
+    return decrypt_field(dynamo_obj_to_python_obj(result["Item"])["data"], as_json=True)
+
+
+def store_encrypted_collection(key1, key2, data):
+    dynamo.put_item(
+        TableName=TABLE_NAME,
+        Item=python_obj_to_dynamo_obj({"key1": key1, "key2": key2, "data": encrypt_field(data)}),
+    )
 
 
 # --- Admin login (phone OTP + cookie session) -------------------------------
@@ -407,7 +484,13 @@ def login_route(event):
         body="successfully logged in",
         headers={
             "x-csrf-token": token_data["csrf"],
-            "Set-Cookie": f"{ADMIN_COOKIE_NAME}={token_data['key2']}; Domain={ADMIN_COOKIE_DOMAIN}; "
+            # Path=/ explicitly, not left to the browser's default (which
+            # would scope it to "/admin", the directory /admin/login itself
+            # lives under) — harmless today since every admin route already
+            # lives under /admin/*, but the same missing-Path bug bit the
+            # user-account cookie in account.py once a route outside its own
+            # login path needed it, so it's fixed here too before it can.
+            "Set-Cookie": f"{ADMIN_COOKIE_NAME}={token_data['key2']}; Domain={ADMIN_COOKIE_DOMAIN}; Path=/; "
             f"Expires={date_string}; Secure; HttpOnly",
         },
     )
@@ -416,3 +499,168 @@ def login_route(event):
 @authenticate
 def logged_in_check_route(event, admin_phone, body):
     return format_response(event=event, http_code=200, body="You are logged in")
+
+
+# --- End-user account login (email OTP + cookie session) --------------------
+# Same OTP/session/CSRF mechanics as the admin login above, but under a
+# separate key1 namespace ("user_*") and for any registered email, not one
+# hardcoded admin. Deliberately duplicated rather than generalizing the admin
+# functions above with extra parameters — this is a live, load-bearing login
+# already used by s3/admin.html, and duplicating a few dozen lines is a much
+# smaller risk than reworking it.
+# Named so account.py can quote the same number in the OTP email rather than
+# a second hardcoded "5" drifting out of sync with the real expiration below.
+USER_OTP_TIMEOUT_MINUTES = 5
+
+
+def find_or_create_user_id(email):
+    email_hash = hash_email(email)
+    result = dynamo.get_item(
+        Key=python_obj_to_dynamo_obj({"key1": "user_email", "key2": email_hash}),
+        TableName=TABLE_NAME,
+    )
+    if "Item" in result:
+        return dynamo_obj_to_python_obj(result["Item"])["user_id"]
+    user_id = create_id(20)
+    dynamo.put_item(
+        TableName=TABLE_NAME,
+        Item=python_obj_to_dynamo_obj({"key1": "user_email", "key2": email_hash, "user_id": user_id}),
+    )
+    return user_id
+
+
+def create_user_otp(user_id, otp_value):
+    python_data = {
+        "key1": "user_otp",
+        "key2": user_id,
+        "otp": otp_value,
+        "expiration": int(time.time()) + (USER_OTP_TIMEOUT_MINUTES * 60),
+        "last_failure": 0,
+    }
+    dynamo.put_item(TableName=TABLE_NAME, Item=python_obj_to_dynamo_obj(python_data))
+    return python_data
+
+
+def set_user_otp(user_id, python_data):
+    dynamo.put_item(TableName=TABLE_NAME, Item=python_obj_to_dynamo_obj(python_data))
+    return python_data
+
+
+def get_user_otp(user_id):
+    result = dynamo.get_item(
+        Key=python_obj_to_dynamo_obj({"key1": "user_otp", "key2": user_id}),
+        TableName=TABLE_NAME,
+    )
+    if "Item" not in result:
+        return None
+    return dynamo_obj_to_python_obj(result["Item"])
+
+
+def delete_user_otp(user_id):
+    dynamo.delete_item(
+        Key=python_obj_to_dynamo_obj({"key1": "user_otp", "key2": user_id}),
+        TableName=TABLE_NAME,
+    )
+
+
+def create_user_token(user_id):
+    python_data = {
+        "key1": "user_token",
+        "key2": create_id(32),
+        "csrf": create_id(32),
+        "user_id": user_id,
+        "expiration": int(time.time()) + (4 * 30 * 24 * 60 * 60),
+    }
+    dynamo.put_item(TableName=TABLE_NAME, Item=python_obj_to_dynamo_obj(python_data))
+    return python_data
+
+
+def get_user_token(token_string):
+    result = dynamo.get_item(
+        Key=python_obj_to_dynamo_obj({"key1": "user_token", "key2": token_string}),
+        TableName=TABLE_NAME,
+    )
+    if "Item" not in result:
+        return None
+    return dynamo_obj_to_python_obj(result["Item"])
+
+
+def delete_user_token(token_id):
+    dynamo.delete_item(
+        Key=python_obj_to_dynamo_obj({"key1": "user_token", "key2": token_id}),
+        TableName=TABLE_NAME,
+    )
+
+
+def get_user_active_tokens(user_id):
+    result = dynamo.get_item(
+        Key=python_obj_to_dynamo_obj({"key1": "user_active_tokens", "key2": user_id}),
+        TableName=TABLE_NAME,
+    )
+    if "Item" in result:
+        active_tokens = dynamo_obj_to_python_obj(result["Item"])
+        active_tokens["tokens"] = {k: v for k, v in active_tokens["tokens"].items() if v > int(time.time())}
+    else:
+        active_tokens = {"key1": "user_active_tokens", "key2": user_id, "tokens": {}}
+    return active_tokens
+
+
+def track_user_token(token_data):
+    active_tokens = get_user_active_tokens(token_data["user_id"])
+    active_tokens["tokens"][token_data["key2"]] = token_data["expiration"]
+    dynamo.put_item(TableName=TABLE_NAME, Item=python_obj_to_dynamo_obj(active_tokens))
+
+
+# Actually extends the token's expiration (not just re-sending the old
+# date in a fresh Set-Cookie header) — expiration doubles as this table's
+# DynamoDB TTL attribute, so a refresh that only changed the cookie without
+# touching the stored item would let DynamoDB silently delete the token
+# before the browser's own copy of the cookie says it should expire.
+def refresh_user_token(token_data):
+    token_data["expiration"] = int(time.time()) + (4 * 30 * 24 * 60 * 60)
+    dynamo.put_item(TableName=TABLE_NAME, Item=python_obj_to_dynamo_obj(token_data))
+    track_user_token(token_data)
+    return token_data
+
+
+def delete_user_active_tokens(user_id):
+    dynamo.delete_item(
+        Key=python_obj_to_dynamo_obj({"key1": "user_active_tokens", "key2": user_id}),
+        TableName=TABLE_NAME,
+    )
+
+
+def find_user_cookie(cookies):
+    for cookie in cookies:
+        parts = cookie.split("=")
+        cookie_name = parts[0].strip(" ;")
+        if cookie_name == USER_COOKIE_NAME:
+            return parts[1].strip(" ;")
+    return None
+
+
+# Wraps a login-required route: validates the session cookie + CSRF token
+# before calling through, same shape as `authenticate` above but for any
+# registered user rather than the one hardcoded admin. The wrapped function
+# receives (event, user_id, body).
+def authenticate_user(func):
+    def wrapper_func(*args, **kwargs):
+        event = args[0]
+        cookie = find_user_cookie(get_cookies(event))
+        body = parse_body(event.get("body"))
+        csrf_token = body.get("csrf")
+        token_data = get_user_token(cookie) if cookie else None
+        if token_data is None or token_data["expiration"] < int(time.time()):
+            return format_response(event=event, http_code=403, body="Your session has expired, please log in")
+        active_tokens = get_user_active_tokens(token_data["user_id"])
+        if token_data["key2"] not in active_tokens["tokens"]:
+            return format_response(event=event, http_code=403, body="Your session has expired, please log in")
+        if csrf_token is None or token_data["csrf"] != csrf_token:
+            # token_data["key2"] is this session's own id — not key1, which
+            # is just the literal record-type string "user_token" and would
+            # delete the wrong (nonexistent) item.
+            delete_user_token(token_data["key2"])
+            return format_response(event=event, http_code=403, body="Your CSRF token is invalid, please log in again")
+        return func(event, token_data["user_id"], body)
+
+    return wrapper_func

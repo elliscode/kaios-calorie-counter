@@ -4,7 +4,19 @@ var DATA_HOST = 'https://calories.elliscode.com';
 var API_HOST = 'https://api.calories.elliscode.com';
 var SUBMIT_URL = API_HOST + '/submit';
 var PRESIGNED_POST_URL = API_HOST + '/presigned-post';
-var APP_VERSION = '3.0.5';
+var ACCOUNT_OTP_URL = API_HOST + '/account/otp';
+var ACCOUNT_LOGIN_URL = API_HOST + '/account/login';
+var ACCOUNT_LOG_OUT_ALL_URL = API_HOST + '/account/log-out-all';
+var ACCOUNT_REFRESH_URL = API_HOST + '/account/refresh';
+var SYNC_FOODS_URL = API_HOST + '/sync/foods';
+var SYNC_DIARY_URL = API_HOST + '/sync/diary';
+var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
+// Must track backend/lambda/calorie_api/sync.py's DELETED_ITEM_RETENTION_DAYS —
+// local tombstones are purged on the same schedule the server purges its own,
+// so a device that's been offline a while doesn't hang onto dead rows any
+// longer than the server would anyway.
+var TOMBSTONE_RETENTION_DAYS = 120;
+var APP_VERSION = '3.0.6';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
 var NON_NUTRIENT_KEYS = ['id', 'date', 'foodId', 'foodName', 'servingName', 'quantity', 'name'];
@@ -42,6 +54,19 @@ function humanizeKey(key) {
   return key.replace(/([A-Z])/g, ' $1').replace(/^./, function (c) { return c.toUpperCase(); });
 }
 
+function nowSec() {
+  return Math.floor(Date.now() / 1000);
+}
+
+// A user-created food's id is a version-4 UUID (see generateGuid() above,
+// the literal "4" nibble + the "8/9/a/b" variant nibble); every catalog
+// (manifest-seeded) food id is a version-5 UUID instead (deterministic,
+// backend/data-prep/convert_for_kaios_local.py's uuid.uuid5(...)) — this is
+// a 100%-reliable discriminator, not a heuristic, used only for the one-time
+// v4 DB migration backfill to tell pre-existing custom foods apart from
+// catalog foods (there was no `source` field before this migration).
+var LOCAL_FOOD_ID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 // Random per-submission id for custom foods — deliberately NOT seeded from the
 // name (unlike the Python data-prep GUIDs), since the name can still be
 // corrected during review after this id has already been handed out. No
@@ -78,17 +103,27 @@ function getLastSyncError() {
 // Caffeine has no input on the "+ Add New Food" form (only an admin can
 // ever set it, during review) — most foods just show "0 mg", which not
 // everyone cares to see, so it's a togglable row in Options. Defaults to
-// on (matches the app's behavior before this setting existed).
+// off.
 function getShowCaffeine() {
   try {
     var raw = localStorage.getItem('showCaffeine');
-    return raw === null ? true : raw === 'true';
-  } catch (e) { return true; }
+    return raw === null ? false : raw === 'true';
+  } catch (e) { return false; }
+}
+
+function getShowCaffeineUpdatedAt() {
+  try { return parseInt(localStorage.getItem('showCaffeineUpdatedAt'), 10) || 0; } catch (e) { return 0; }
+}
+
+function setShowCaffeineUpdatedAt(ts) {
+  try { localStorage.setItem('showCaffeineUpdatedAt', String(ts)); } catch (e) { /* ignore */ }
 }
 
 function setShowCaffeine(show) {
   try { localStorage.setItem('showCaffeine', String(show)); } catch (e) { /* ignore */ }
+  setShowCaffeineUpdatedAt(nowSec());
   applyCaffeineVisibility();
+  syncPreferences();
 }
 
 function applyCaffeineVisibility() {
@@ -97,6 +132,56 @@ function applyCaffeineVisibility() {
   var rowServ = document.getElementById('row-serv-caffeine');
   if (rowSum) rowSum.style.display = display;
   if (rowServ) rowServ.style.display = display;
+}
+
+// ─── Account session (email OTP login) ─────────────────────────────────────
+// The session itself lives in an HttpOnly cookie the browser handles
+// automatically — this app never reads/writes that cookie directly. The
+// CSRF token, though, is only ever handed to us once (a response header on
+// /account/login) and has to be resent by us on every authenticated call
+// (double-submit pattern, see backend/lambda/calorie_api/utils.py's
+// authenticate_user), so it's the one piece of session state we do persist
+// ourselves. Its mere presence is also how this app answers "am I logged
+// in?" without a network round trip.
+function getCsrf() {
+  try { return localStorage.getItem('csrf'); } catch (e) { return null; }
+}
+
+function setCsrf(csrf) {
+  try { localStorage.setItem('csrf', csrf); } catch (e) { /* ignore */ }
+}
+
+function clearCsrf() {
+  try { localStorage.removeItem('csrf'); } catch (e) { /* ignore */ }
+}
+
+function isLoggedIn() {
+  return !!getCsrf();
+}
+
+// Set once on first successful login, never cleared by logout — this is
+// what decides whether local deletes become sync-able tombstones (see
+// dbSoftDeleteDiaryEntry/dbSoftDeleteFood) rather than real deletes. A
+// device that's never logged in has nothing to reconcile, so there's no
+// reason to keep tombstones around at all on it.
+function getEverLoggedIn() {
+  try { return localStorage.getItem('everLoggedIn') === 'true'; } catch (e) { return false; }
+}
+
+function markEverLoggedIn() {
+  try { localStorage.setItem('everLoggedIn', 'true'); } catch (e) { /* ignore */ }
+}
+
+function setAuthDotState() {
+  var on = isLoggedIn();
+  var dots = document.querySelectorAll('.auth-dot');
+  for (var i = 0; i < dots.length; i++) {
+    dots[i].classList.toggle('auth-dot-on', on);
+  }
+  var labels = document.querySelectorAll('.auth-status-text');
+  for (var j = 0; j < labels.length; j++) {
+    labels[j].textContent = on ? 'Logged In' : 'Logged Out';
+  }
 }
 
 var _statusTimer = null;
@@ -115,7 +200,7 @@ function showStatus(msg, isError) {
 
 var db = null;
 var DB_NAME = 'kaios-calorie-counter';
-var DB_VERSION = 3;
+var DB_VERSION = 4;
 
 function openDB(callback) {
   var req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -123,8 +208,11 @@ function openDB(callback) {
     var d = e.target.result;
     var tx = e.target.transaction;
 
+    var foodsStore;
     if (!d.objectStoreNames.contains('foods')) {
-      d.createObjectStore('foods', { keyPath: 'id' });
+      foodsStore = d.createObjectStore('foods', { keyPath: 'id' });
+    } else {
+      foodsStore = tx.objectStore('foods');
     }
 
     var diaryStore;
@@ -139,8 +227,9 @@ function openDB(callback) {
       d.createObjectStore('syncedFiles', { keyPath: 'id' });
     }
 
+    var usageStore;
     if (!d.objectStoreNames.contains('usageCounts')) {
-      var usageStore = d.createObjectStore('usageCounts', { keyPath: 'id' });
+      usageStore = d.createObjectStore('usageCounts', { keyPath: 'id' });
       // Backfill from any diary entries that already existed before this
       // store did, so upgrading devices don't start every food at zero.
       diaryStore.getAll().onsuccess = function (ev) {
@@ -149,13 +238,16 @@ function openDB(callback) {
           counts[entry.foodId] = (counts[entry.foodId] || 0) + 1;
         });
         Object.keys(counts).forEach(function (foodId) {
-          usageStore.put({ id: foodId, count: counts[foodId] });
+          usageStore.put({ id: foodId, count: counts[foodId], updated: nowSec() });
         });
       };
+    } else {
+      usageStore = tx.objectStore('usageCounts');
     }
 
+    var lastServingStore;
     if (!d.objectStoreNames.contains('lastServings')) {
-      var lastServingStore = d.createObjectStore('lastServings', { keyPath: 'id' });
+      lastServingStore = d.createObjectStore('lastServings', { keyPath: 'id' });
       // Backfill from any diary entries that already existed before this
       // store did, using each food's most recently-added entry (autoIncrement
       // ids are monotonically increasing), so upgrading devices start out
@@ -171,7 +263,76 @@ function openDB(callback) {
         });
         Object.keys(latestByFood).forEach(function (foodId) {
           var entry = latestByFood[foodId];
-          lastServingStore.put({ id: foodId, servingName: entry.servingName, quantity: entry.quantity });
+          lastServingStore.put({ id: foodId, servingName: entry.servingName, quantity: entry.quantity, updated: nowSec() });
+        });
+      };
+    } else {
+      lastServingStore = tx.objectStore('lastServings');
+    }
+
+    // v4: accounts/sync. New store for per-food submission bookkeeping (see
+    // "My Foods" screen) — deliberately separate from `foods` itself, since
+    // an approved+exported food's `foods` record gets overwritten by the
+    // normal catalog sync under the same id, and this bookkeeping needs to
+    // survive that overwrite.
+    var mySubmissionsStore;
+    if (!d.objectStoreNames.contains('mySubmissions')) {
+      mySubmissionsStore = d.createObjectStore('mySubmissions', { keyPath: 'id' });
+    } else {
+      mySubmissionsStore = tx.objectStore('mySubmissions');
+    }
+
+    if (e.oldVersion < 4) {
+      // Backfill `foods` with the fields sync/status computation now needs.
+      // Pre-v4 records have no way to tell "I created this locally" apart
+      // from "this came from the catalog" — the id's UUID version nibble
+      // does (see LOCAL_FOOD_ID_REGEX) — so only records that look
+      // user-created get a mySubmissions row; anything else is left as-is
+      // and will be fully overwritten by the next catalog sync regardless.
+      foodsStore.getAll().onsuccess = function (ev) {
+        (ev.target.result || []).forEach(function (food) {
+          if (food.source) return; // already migrated
+          var isLocal = LOCAL_FOOD_ID_REGEX.test(food.id);
+          food.source = isLocal ? 'local' : 'catalog';
+          food.updated = nowSec();
+          food.deleted = false;
+          foodsStore.put(food);
+          if (isLocal) {
+            mySubmissionsStore.put({ id: food.id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' });
+          }
+        });
+      };
+
+      // Backfill `diary` with a stable cross-device guid + sync bookkeeping.
+      // `id` (autoincrement) stays the real local key — untouched, still
+      // used everywhere it already was — `guid` is purely the /sync/diary
+      // merge key.
+      diaryStore.getAll().onsuccess = function (ev) {
+        (ev.target.result || []).forEach(function (entry) {
+          if (entry.guid) return; // already migrated
+          entry.guid = generateGuid();
+          entry.updated = entry.updated || nowSec();
+          entry.deleted = false;
+          diaryStore.put(entry);
+        });
+      };
+
+      // A pre-existing v3 install already has real usageCounts/lastServings
+      // data (from its own earlier v2->v3 backfill, or ordinary use since
+      // then) — this just adds the `updated` field /sync/preferences needs,
+      // it doesn't re-derive anything from diary history again.
+      usageStore.getAll().onsuccess = function (ev) {
+        (ev.target.result || []).forEach(function (rec) {
+          if (rec.updated) return;
+          rec.updated = nowSec();
+          usageStore.put(rec);
+        });
+      };
+      lastServingStore.getAll().onsuccess = function (ev) {
+        (ev.target.result || []).forEach(function (rec) {
+          if (rec.updated) return;
+          rec.updated = nowSec();
+          lastServingStore.put(rec);
         });
       };
     }
@@ -214,6 +375,13 @@ function dbGetAllFoods(callback) {
   var req = tx.objectStore('foods').getAll();
   req.onsuccess = function () { callback(req.result || []); };
   req.onerror = function () { callback([]); };
+}
+
+function dbGetFood(id, callback) {
+  var tx = db.transaction('foods', 'readonly');
+  var req = tx.objectStore('foods').get(id);
+  req.onsuccess = function () { callback(req.result || null); };
+  req.onerror = function () { callback(null); };
 }
 
 function dbGetDiaryByDate(date, callback) {
@@ -289,9 +457,107 @@ function dbGetAllLastServings(callback) {
 
 function dbSetLastServing(foodId, servingName, quantity, callback) {
   var tx = db.transaction('lastServings', 'readwrite');
-  tx.objectStore('lastServings').put({ id: foodId, servingName: servingName, quantity: quantity });
+  tx.objectStore('lastServings').put({ id: foodId, servingName: servingName, quantity: quantity, updated: nowSec() });
   tx.oncomplete = function () { callback(); };
   tx.onerror = function () { callback(); };
+}
+
+// ─── My Foods bookkeeping (mySubmissions) ──────────────────────────────────
+// Never sent to /sync/* directly — purely local, survives a catalog-sync
+// overwrite of the corresponding `foods` record since it lives in its own
+// store. See computeMyFoodStatus() for how these rows turn into a status.
+
+function dbGetAllMySubmissions(callback) {
+  var tx = db.transaction('mySubmissions', 'readonly');
+  var req = tx.objectStore('mySubmissions').getAll();
+  req.onsuccess = function () { callback(req.result || []); };
+  req.onerror = function () { callback([]); };
+}
+
+function dbPutMySubmission(record, callback) {
+  var tx = db.transaction('mySubmissions', 'readwrite');
+  tx.objectStore('mySubmissions').put(record);
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+function dbGetMySubmission(id, callback) {
+  var tx = db.transaction('mySubmissions', 'readonly');
+  var req = tx.objectStore('mySubmissions').get(id);
+  req.onsuccess = function () { callback(req.result || null); };
+  req.onerror = function () { callback(null); };
+}
+
+function dbDeleteMySubmission(foodId, callback) {
+  var tx = db.transaction('mySubmissions', 'readwrite');
+  tx.objectStore('mySubmissions').delete(foodId);
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+// ─── Tombstone-based soft delete ───────────────────────────────────────────
+// A hard delete leaves nothing local to report as "deleted" on the next
+// sync — so once a device has ever logged in (getEverLoggedIn()), deletes
+// become tombstones (deleted:true, a fresh `updated`) instead, and get
+// filtered out of every display/query path (see renderDiary/
+// renderSearchResults) until the next successful sync reports them and the
+// eventual local purge (purgeOldTombstonesLocally) actually removes them. A
+// device that's never logged in has nothing to reconcile against, so it
+// keeps doing real hard deletes — a tombstone there would just be permanent
+// local bloat with no purpose.
+
+function dbSoftDeleteDiaryEntry(entry, callback) {
+  var updated = {};
+  Object.keys(entry).forEach(function (k) { updated[k] = entry[k]; });
+  updated.deleted = true;
+  updated.updated = nowSec();
+  var tx = db.transaction('diary', 'readwrite');
+  tx.objectStore('diary').put(updated);
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+function dbSoftDeleteFood(foodId, callback) {
+  var tx = db.transaction('foods', 'readwrite');
+  var store = tx.objectStore('foods');
+  var req = store.get(foodId);
+  req.onsuccess = function () {
+    var food = req.result;
+    if (food) {
+      food.deleted = true;
+      food.updated = nowSec();
+      store.put(food);
+    }
+  };
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+function purgeOldTombstonesLocally(callback) {
+  if (!getEverLoggedIn()) { callback(); return; }
+  var cutoff = nowSec() - TOMBSTONE_RETENTION_DAYS * 24 * 60 * 60;
+  var remaining = 2;
+  function done() { remaining--; if (remaining === 0) callback(); }
+
+  var diaryTx = db.transaction('diary', 'readwrite');
+  var diaryStore = diaryTx.objectStore('diary');
+  diaryStore.getAll().onsuccess = function (ev) {
+    (ev.target.result || []).forEach(function (entry) {
+      if (entry.deleted && entry.updated && entry.updated < cutoff) diaryStore.delete(entry.id);
+    });
+  };
+  diaryTx.oncomplete = done;
+  diaryTx.onerror = done;
+
+  var foodsTx = db.transaction('foods', 'readwrite');
+  var foodsStore = foodsTx.objectStore('foods');
+  foodsStore.getAll().onsuccess = function (ev) {
+    (ev.target.result || []).forEach(function (food) {
+      if (food.deleted && food.updated && food.updated < cutoff) foodsStore.delete(food.id);
+    });
+  };
+  foodsTx.oncomplete = done;
+  foodsTx.onerror = done;
 }
 
 // ─── Data sync (manifest.json + food files → IndexedDB) ──────────────────────
@@ -336,6 +602,44 @@ function xhrGetJson(url, onProgress) {
       reject(new Error('XHR network error fetching ' + url));
     };
     xhr.send();
+  });
+}
+
+// Credentialed POST helper for login/submit/sync — built on XMLHttpRequest
+// rather than fetch(), same reasoning as xhrGetJson above: xhrGetJson only
+// had to replace fetch() for GETs on this hardware, but the credentialed
+// cookie flow this function serves is new, higher-stakes territory with no
+// existing proof fetch()+credentials:'include' is reliable here either, so
+// this errs toward the one network primitive already proven on real
+// hardware rather than assuming fetch() is fine.
+//
+// Unlike xhrGetJson, this resolves on ANY response (even a 403 or 400) with
+// {status, data, getHeader} — callers need the status code and body to
+// branch on "session expired" / validation errors, not just success. It
+// only rejects on a genuine transport failure (offline, DNS, etc.).
+//
+// No explicit Content-Type header is set, same trick postSubmitJson already
+// used — keeps this a CORS-simple request (the backend's
+// Access-Control-Allow-Headers is Content-Type only, so a custom one would
+// trigger a preflight it can't answer).
+function xhrPostJson(url, body) {
+  return new Promise(function (resolve, reject) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.withCredentials = true;
+    xhr.onload = function () {
+      var data = null;
+      try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch (e) { /* non-JSON body */ }
+      resolve({
+        status: xhr.status,
+        data: data,
+        getHeader: function (name) { return xhr.getResponseHeader(name); }
+      });
+    };
+    xhr.onerror = function () {
+      reject(new Error('XHR network error posting to ' + url));
+    };
+    xhr.send(JSON.stringify(body || {}));
   });
 }
 
@@ -402,7 +706,19 @@ function syncData(onFileStart, onFileProgress, callback) {
           onFileStart(i + 1, toFetch.length, fileEntry);
           xhrGetJson(DATA_HOST + fileEntry.url, onFileProgress)
             .then(function (foodsArr) {
-              dbBulkPutFoods(foodsArr, function () {
+              // Tagged as 'catalog' here — this is the one place a food ever
+              // becomes an "Approved" My Foods entry (see
+              // computeMyFoodStatus), since a user-submitted food only ever
+              // reaches this path once it's been approved+exported and
+              // shows up in a downloaded manifest data file under its
+              // original id.
+              var tagged = foodsArr.map(function (f) {
+                f.source = 'catalog';
+                f.updated = nowSec();
+                f.deleted = false;
+                return f;
+              });
+              dbBulkPutFoods(tagged, function () {
                 dbMarkFileSynced(fileEntry.id, function () { fetchNext(i + 1); });
               });
             })
@@ -417,6 +733,323 @@ function syncData(onFileStart, onFileProgress, callback) {
         callback();
       }); // offline-first: fall back to whatever's already cached
   });
+}
+
+// ─── Account sync (foods / diary / preferences) ────────────────────────────
+//
+// Mirrors the backend's own reconciliation model: every call re-sends the
+// FULL current local state of one collection (not a delta/queue), the
+// server merges it against whatever it already has (newer `updated`
+// timestamp wins, whole item as a unit) and returns the merged result,
+// which becomes the new local source of truth. Because every call is a full
+// resync rather than a queued delta, a failed call loses nothing durably —
+// the next natural trigger (next mutation, next boot, next login) just
+// resends the same data — so failures here are handled the same
+// silent/best-effort/no-retry way /submit already was, just still recorded
+// via the existing setLastSyncError() for visibility in Options.
+
+function handleAuthExpired() {
+  // A 403 from an authenticated call means the server has already
+  // invalidated this session (expired, or a CSRF mismatch — see
+  // authenticate_user in the backend, which deletes the token on
+  // mismatch) — clear local session state to match rather than silently
+  // keep sending a token the server will never accept again.
+  if (!isLoggedIn()) return;
+  clearCsrf();
+  setAuthDotState();
+}
+
+function upsertStateFood(food) {
+  state.foodsById[food.id] = food;
+  var idx = -1;
+  for (var i = 0; i < state.allFoods.length; i++) {
+    if (state.allFoods[i].id === food.id) { idx = i; break; }
+  }
+  if (idx === -1) state.allFoods.push(food); else state.allFoods[idx] = food;
+}
+
+function buildFoodsSyncPayload(callback) {
+  dbGetAllMySubmissions(function (subs) {
+    if (!subs.length) { callback({}); return; }
+    var payload = {};
+    var remaining = subs.length;
+    subs.forEach(function (sub) {
+      dbGetFood(sub.id, function (food) {
+        if (food) {
+          payload[sub.id] = {
+            name: food.name,
+            servings: food.servings,
+            updated: food.updated || nowSec(),
+            deleted: food.deleted === true
+          };
+        }
+        remaining--;
+        if (remaining === 0) callback(payload);
+      });
+    });
+  });
+}
+
+// `merged` is {foodId: {name, servings, updated, deleted}}. If a food is
+// already known locally as a real catalog entry (source:'catalog' — i.e. it
+// was already approved+exported and downloaded via the normal manifest
+// sync), that status wins and is never demoted back to 'local' by this
+// merge, even though this same id is also present in the account's own
+// synced-foods collection server-side.
+function applyFoodsSyncMerge(merged, callback) {
+  var ids = Object.keys(merged);
+  if (!ids.length) { callback(); return; }
+  var remaining = ids.length;
+  ids.forEach(function (id) {
+    var item = merged[id];
+    dbGetFood(id, function (existing) {
+      var isCatalog = existing && existing.source === 'catalog';
+      var food = {
+        id: id,
+        name: item.name,
+        servings: item.servings,
+        updated: item.updated,
+        deleted: !!item.deleted,
+        source: isCatalog ? 'catalog' : 'local'
+      };
+      dbBulkPutFoods([food], function () {
+        upsertStateFood(food);
+        remaining--;
+        if (remaining === 0) callback();
+      });
+    });
+  });
+}
+
+// Closes a cross-device gap: if a food was created on device A, device B
+// (same account, different device) has no local mySubmissions row for it at
+// all after logging in — without this, it would sync into device B's
+// `foods` store but never show up in device B's My Foods list. `submittedAt`
+// here is only an approximation (device B was never told the true original
+// submission time) — the very next status check still resolves correctly
+// against the catalog regardless.
+function reconcileMySubmissionsFromFoodsSync(merged, callback) {
+  var ids = Object.keys(merged).filter(function (id) { return merged[id].deleted !== true; });
+  if (!ids.length) { callback(); return; }
+  dbGetAllMySubmissions(function (subs) {
+    var known = {};
+    subs.forEach(function (s) { known[s.id] = true; });
+    var missing = ids.filter(function (id) { return !known[id]; });
+    if (!missing.length) { callback(); return; }
+    var remaining = missing.length;
+    missing.forEach(function (id) {
+      var approxTime = merged[id].updated || nowSec();
+      dbPutMySubmission({ id: id, createdAt: approxTime, submittedAt: approxTime, submitStatus: 'pending' }, function () {
+        remaining--;
+        if (remaining === 0) callback();
+      });
+    });
+  });
+}
+
+function syncFoods(callback) {
+  callback = callback || function () {};
+  if (!isLoggedIn()) { callback(); return; }
+  buildFoodsSyncPayload(function (payload) {
+    xhrPostJson(SYNC_FOODS_URL, { csrf: getCsrf(), foods: payload })
+      .then(function (res) {
+        if (res.status === 200 && res.data && res.data.foods) {
+          applyFoodsSyncMerge(res.data.foods, function () {
+            reconcileMySubmissionsFromFoodsSync(res.data.foods, callback);
+          });
+        } else if (res.status === 403) {
+          handleAuthExpired();
+          callback();
+        } else {
+          setLastSyncError('sync/foods: HTTP ' + res.status);
+          callback();
+        }
+      })
+      .catch(function (err) {
+        setLastSyncError('sync/foods: ' + describeFetchError(err));
+        callback();
+      });
+  });
+}
+
+function buildDiarySyncPayload(date, callback) {
+  dbGetDiaryByDate(date, function (rawEntries) {
+    var payload = {};
+    rawEntries.forEach(function (entry) {
+      if (!entry.guid) return; // shouldn't happen post-migration, but don't send an unkeyable entry
+      var item = {};
+      Object.keys(entry).forEach(function (k) {
+        if (k === 'id') return; // local autoincrement key — never sent, guid is the sync key
+        item[k] = entry[k];
+      });
+      item.updated = entry.updated || nowSec();
+      item.deleted = entry.deleted === true;
+      payload[entry.guid] = item;
+    });
+    callback(payload);
+  });
+}
+
+// `merged` is {guid: {...diary fields, updated, deleted}} for exactly one
+// date. An incoming guid matching an existing local entry updates it
+// in-place (preserving the local autoincrement id); an unrecognized guid is
+// a new entry from another device and gets a fresh local id via add().
+function applyDiarySyncMerge(date, merged, callback) {
+  var guids = Object.keys(merged);
+  if (!guids.length) { callback(); return; }
+  dbGetDiaryByDate(date, function (rawEntries) {
+    var existingByGuid = {};
+    rawEntries.forEach(function (e) { if (e.guid) existingByGuid[e.guid] = e; });
+    var remaining = guids.length;
+    function done() { remaining--; if (remaining === 0) callback(); }
+    guids.forEach(function (guid) {
+      var item = merged[guid];
+      var existing = existingByGuid[guid];
+      var entry = {};
+      Object.keys(item).forEach(function (k) { entry[k] = item[k]; });
+      entry.guid = guid;
+      entry.date = date;
+      if (existing) {
+        dbUpdateDiaryEntry(existing.id, entry, done);
+      } else {
+        dbAddDiaryEntry(entry, function () { done(); });
+      }
+    });
+  });
+}
+
+function syncDiaryForDate(date, callback) {
+  callback = callback || function () {};
+  if (!isLoggedIn()) { callback(); return; }
+  buildDiarySyncPayload(date, function (payload) {
+    xhrPostJson(SYNC_DIARY_URL, { csrf: getCsrf(), date: date, entries: payload })
+      .then(function (res) {
+        if (res.status === 200 && res.data && res.data.entries) {
+          applyDiarySyncMerge(date, res.data.entries, function () {
+            if (date === state.currentDate) renderDiary(); // pick up anything another device added
+            callback();
+          });
+        } else if (res.status === 403) {
+          handleAuthExpired();
+          callback();
+        } else {
+          setLastSyncError('sync/diary: HTTP ' + res.status);
+          callback();
+        }
+      })
+      .catch(function (err) {
+        setLastSyncError('sync/diary: ' + describeFetchError(err));
+        callback();
+      });
+  });
+}
+
+function applyPreferencesSyncMerge(merged, callback) {
+  if (merged.settings && typeof merged.settings.showCaffeine === 'boolean') {
+    try { localStorage.setItem('showCaffeine', String(merged.settings.showCaffeine)); } catch (e) { /* ignore */ }
+    if (merged.settings.updated) setShowCaffeineUpdatedAt(merged.settings.updated);
+    applyCaffeineVisibility();
+  }
+  var lastServings = merged.lastServings || {};
+  var usageCounts = merged.usageCounts || {};
+  var lsIds = Object.keys(lastServings);
+  var ucIds = Object.keys(usageCounts);
+  var remaining = lsIds.length + ucIds.length;
+  if (remaining === 0) { callback(); return; }
+  function done() { remaining--; if (remaining === 0) callback(); }
+  lsIds.forEach(function (foodId) {
+    var r = lastServings[foodId];
+    state.lastServings[foodId] = { servingName: r.servingName, quantity: r.quantity };
+    var tx = db.transaction('lastServings', 'readwrite');
+    tx.objectStore('lastServings').put({ id: foodId, servingName: r.servingName, quantity: r.quantity, updated: r.updated });
+    tx.oncomplete = done;
+    tx.onerror = done;
+  });
+  ucIds.forEach(function (foodId) {
+    var r = usageCounts[foodId];
+    state.usageCounts[foodId] = r.count;
+    var tx = db.transaction('usageCounts', 'readwrite');
+    tx.objectStore('usageCounts').put({ id: foodId, count: r.count, updated: r.updated });
+    tx.oncomplete = done;
+    tx.onerror = done;
+  });
+}
+
+function syncPreferences(callback) {
+  callback = callback || function () {};
+  if (!isLoggedIn()) { callback(); return; }
+  dbGetAllLastServings(function (lastServingRecords) {
+    dbGetAllUsageCounts(function (usageRecords) {
+      var lastServings = {};
+      lastServingRecords.forEach(function (r) {
+        lastServings[r.id] = { servingName: r.servingName, quantity: r.quantity, updated: r.updated || nowSec() };
+      });
+      var usageCounts = {};
+      usageRecords.forEach(function (r) {
+        usageCounts[r.id] = { count: r.count, updated: r.updated || nowSec() };
+      });
+      var body = {
+        csrf: getCsrf(),
+        settings: { showCaffeine: getShowCaffeine(), updated: getShowCaffeineUpdatedAt() || nowSec() },
+        lastServings: lastServings,
+        usageCounts: usageCounts
+      };
+      xhrPostJson(SYNC_PREFERENCES_URL, body)
+        .then(function (res) {
+          if (res.status === 200 && res.data) {
+            applyPreferencesSyncMerge(res.data, callback);
+          } else if (res.status === 403) {
+            handleAuthExpired();
+            callback();
+          } else {
+            setLastSyncError('sync/preferences: HTTP ' + res.status);
+            callback();
+          }
+        })
+        .catch(function (err) {
+          setLastSyncError('sync/preferences: ' + describeFetchError(err));
+          callback();
+        });
+    });
+  });
+}
+
+// Called after any diary add/edit/delete — a no-op while logged out.
+function syncAfterDiaryMutation() {
+  if (!isLoggedIn()) return;
+  syncDiaryForDate(state.currentDate);
+  syncPreferences();
+}
+
+function runFullSync(callback) {
+  callback = callback || function () {};
+  if (!isLoggedIn()) { callback(); return; }
+  syncFoods(function () {
+    syncDiaryForDate(state.currentDate, function () {
+      syncPreferences(callback);
+    });
+  });
+}
+
+// Keeps the session alive across long-lived, actively-used installs without
+// waiting on its own 4-month expiration — throttled to roughly once/day,
+// mirroring kaios-shared-list's refreshCookieIfNeeded.
+var ACCOUNT_REFRESH_KEY = 'accountRefreshAt';
+
+function accountRefreshIfNeeded() {
+  if (!isLoggedIn()) return;
+  var last = 0;
+  try { last = parseInt(localStorage.getItem(ACCOUNT_REFRESH_KEY), 10) || 0; } catch (e) { /* ignore */ }
+  if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+  xhrPostJson(ACCOUNT_REFRESH_URL, { csrf: getCsrf() })
+    .then(function (res) {
+      if (res.status === 200) {
+        try { localStorage.setItem(ACCOUNT_REFRESH_KEY, String(Date.now())); } catch (e) { /* ignore */ }
+      } else if (res.status === 403) {
+        handleAuthExpired();
+      }
+    })
+    .catch(function () { /* best-effort — next boot tries again */ });
 }
 
 // ─── Panel & Softkey ──────────────────────────────────────────────────────────
@@ -456,6 +1089,12 @@ function updateSoftkeysForFocus() {
     var onSubmitBtn = focused() && focused().id === 'btn-new-food-submit';
     setSoftkeys('Back', onSubmitBtn ? 'Submit' : 'Next', '');
   } else if (panel.id === 'panel-options') {
+    setSoftkeys('Back', 'SELECT', '');
+  } else if (panel.id === 'panel-login-email') {
+    setSoftkeys('Back', 'Next', '');
+  } else if (panel.id === 'panel-login-otp') {
+    setSoftkeys('Back', 'Verify', '');
+  } else if (panel.id === 'panel-my-foods') {
     setSoftkeys('Back', 'SELECT', '');
   }
 }
@@ -721,6 +1360,12 @@ function handleSoftLeft() {
     returnToSearchPanel();
   } else if (panel.id === 'panel-options') {
     showDiaryPanel();
+  } else if (panel.id === 'panel-login-email') {
+    showOptionsPanel();
+  } else if (panel.id === 'panel-login-otp') {
+    showLoginEmailPanel();
+  } else if (panel.id === 'panel-my-foods') {
+    showOptionsPanel();
   }
   // panel-diary: no left-softkey action
 }
@@ -754,6 +1399,10 @@ document.getElementById('sk-center').addEventListener('click', function () {
     saveServingsEdit();
   } else if (panel.id === 'panel-new-food') {
     newFoodCenterAction();
+  } else if (panel.id === 'panel-login-email') {
+    submitLoginEmail();
+  } else if (panel.id === 'panel-login-otp') {
+    submitLoginOtp();
   } else {
     interact(focused());
   }
@@ -778,12 +1427,16 @@ document.getElementById('btn-diary-add-food').addEventListener('click', showSear
 document.getElementById('input-diary-date').addEventListener('change', function (e) {
   state.currentDate = e.target.value || todayStr();
   renderDiary(); // already on this panel — don't re-show/re-focus, just refresh the list
+  syncDiaryForDate(state.currentDate);
 });
 
 wireFocusForwardingWrapper('wrap-diary-date', 'input-diary-date');
 
 function renderDiary(callback) {
-  dbGetDiaryByDate(state.currentDate, function (entries) {
+  dbGetDiaryByDate(state.currentDate, function (rawEntries) {
+    // Tombstoned entries stay in IndexedDB (see dbSoftDeleteDiaryEntry) so a
+    // later sync can report the deletion — they're just never shown.
+    var entries = rawEntries.filter(function (e) { return e.deleted !== true; });
     state.diaryEntries = entries;
     var ul = document.getElementById('diary-ul');
     ul.innerHTML = '';
@@ -858,7 +1511,7 @@ function renderSearchResults(query) {
   ul.innerHTML = '';
   var q = query.trim().toLowerCase();
   var results = q ? state.allFoods.filter(function (f) {
-    return f.name.toLowerCase().indexOf(q) !== -1;
+    return f.deleted !== true && f.name.toLowerCase().indexOf(q) !== -1;
   }).sort(function (a, b) {
     var countA = state.usageCounts[a.id] || 0;
     var countB = state.usageCounts[b.id] || 0;
@@ -949,6 +1602,7 @@ function commitFoodAndTray(food) {
       if (remaining === 0) {
         showDiaryPanel();
         showStatus('Added ' + items.length + (items.length === 1 ? ' item' : ' items'), false);
+        syncAfterDiaryMutation();
       }
     });
   });
@@ -963,7 +1617,14 @@ function buildDiaryEntry(food, servingObj, qty) {
     foodId: food.id,
     foodName: food.name,
     servingName: servingObj.name,
-    quantity: qty
+    quantity: qty,
+    // Stable cross-device id for /sync/diary's merge key — distinct from
+    // the local autoincrement `id`, which stays purely a local IndexedDB
+    // key (see the v4 DB migration). Callers editing an existing entry
+    // should overwrite this with the entry's original guid afterward.
+    guid: generateGuid(),
+    updated: nowSec(),
+    deleted: false
   };
   Object.keys(servingObj).forEach(function (key) {
     if (key === 'name' || key === 'quantity') return;
@@ -979,7 +1640,7 @@ function showServingsPanel(entry) {
   state.editingFood = state.foodsById[entry.foodId] || null;
 
   showPanel('panel-servings');
-  document.getElementById('servings-title').textContent = entry.foodName;
+  document.getElementById('servings-food-name').textContent = entry.foodName;
   document.getElementById('input-serving-qty').value = formatQty(entry.quantity);
 
   var select = document.getElementById('input-serving-name');
@@ -1084,23 +1745,37 @@ function saveServingsEdit() {
     return;
   }
   var updated = buildDiaryEntry(state.editingFood, baseline, qty);
+  // Preserve the entry's original guid across an edit — it's the /sync/diary
+  // merge key, and a fresh one here would make the server treat this as a
+  // brand new entry rather than an update to the existing one.
+  updated.guid = state.editingEntry.guid || updated.guid;
   dbUpdateDiaryEntry(state.editingEntry.id, updated, function () {
     rememberServing(state.editingFood.id, baseline.name, qty, function () {
       showDiaryPanel();
+      syncAfterDiaryMutation();
     });
   });
 }
 
 function deleteCurrentEntry() {
   if (!state.editingEntry) return;
-  var foodId = state.editingEntry.foodId;
-  dbDeleteDiaryEntry(state.editingEntry.id, function () {
+  var entry = state.editingEntry;
+  var foodId = entry.foodId;
+  function afterDelete() {
     state.usageCounts[foodId] = Math.max(0, (state.usageCounts[foodId] || 0) - 1);
     dbDecrementUsageCount(foodId, function () {
       showDiaryPanel();
       showStatus('Deleted', false);
+      syncAfterDiaryMutation();
     });
-  });
+  }
+  // Once this device has ever logged in, deletes become tombstones so a
+  // later sync can report them — see dbSoftDeleteDiaryEntry.
+  if (getEverLoggedIn()) {
+    dbSoftDeleteDiaryEntry(entry, afterDelete);
+  } else {
+    dbDeleteDiaryEntry(entry.id, afterDelete);
+  }
 }
 
 // ─── Screen: New Food ─────────────────────────────────────────────────────────
@@ -1337,17 +2012,25 @@ function submitNewFood() {
       fat: fat,
       carbohydrates: carbs,
       protein: protein
-    }].concat(extraServings)
+    }].concat(extraServings),
+    source: 'local',
+    updated: nowSec(),
+    deleted: false
   };
 
   dbBulkPutFoods([food], function () {
     state.allFoods.push(food);
     state.foodsById[food.id] = food;
 
-    addFoodToDiaryDefault(food, function () {
-      submitNewFoodToApi(id, name, food.servings, photo);
-      showDiaryPanel();
-      showStatus('Added ' + name, false);
+    // My Foods must show every locally-created food regardless of login
+    // state, so this bookkeeping row is created unconditionally — only the
+    // actual submission attempt below is gated on being logged in.
+    dbPutMySubmission({ id: id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
+      addFoodToDiaryDefault(food, function () {
+        if (isLoggedIn()) submitNewFoodToApi(id, name, food.servings, photo);
+        showDiaryPanel();
+        showStatus('Added ' + name, false);
+      });
     });
   });
 }
@@ -1382,6 +2065,14 @@ function getPhotoExtension(file) {
 // immediately, if there's no photo) does /submit get called with the food's
 // fields as plain JSON. The whole chain stays best-effort/non-blocking
 // relative to the local add above — a failure at any step is just logged.
+// Both /presigned-post and /submit now require a logged-in session (a
+// deliberate spam gate — see the backend) — this function is only ever
+// called when isLoggedIn() is already true, but the calls themselves still
+// send `csrf` since that's what the server actually checks.
+//
+// Only a genuine 200 from /submit flips this food's My Foods status from
+// "Local" to "Approval Pending" — a timeout, 401/403, or any other failure
+// leaves it exactly as "Local", per spec.
 function submitNewFoodToApi(id, name, servings, photo) {
   var extension = photo ? getPhotoExtension(photo) : null;
   var uploadStep = (photo && extension) ? uploadPhotoViaPresignedPost(id, extension, photo) : Promise.resolve(null);
@@ -1390,23 +2081,33 @@ function submitNewFoodToApi(id, name, servings, photo) {
     .then(function (photoKey) {
       return postSubmitJson(id, name, servings, photoKey);
     })
+    .then(function (res) {
+      if (res && res.status === 200) {
+        dbGetMySubmission(id, function (existing) {
+          var record = existing || { id: id, createdAt: nowSec() };
+          record.submittedAt = nowSec();
+          record.submitStatus = 'pending';
+          dbPutMySubmission(record, function () { syncFoods(); });
+        });
+      }
+    })
     .catch(function (err) {
       console.log('New food submission failed (non-blocking)', err);
     });
 }
 
 function uploadPhotoViaPresignedPost(id, extension, photo) {
-  return fetch(PRESIGNED_POST_URL, { method: 'POST', body: JSON.stringify({ id: id, extension: extension }) })
+  return xhrPostJson(PRESIGNED_POST_URL, { id: id, extension: extension, csrf: getCsrf() })
     .then(function (res) {
-      if (!res.ok) throw new Error('Could not get a presigned upload URL');
-      return res.json();
-    })
-    .then(function (presigned) {
+      if (res.status !== 200 || !res.data) throw new Error('Could not get a presigned upload URL (HTTP ' + res.status + ')');
+      var presigned = res.data;
       var formData = new FormData();
       Object.keys(presigned.fields).forEach(function (key) {
         formData.append(key, presigned.fields[key]);
       });
       formData.append('file', photo); // must be appended last — S3's required presigned-POST form shape
+      // Different origin (S3, not our API) — no cookie/csrf involved, so
+      // this leg stays on fetch() rather than xhrPostJson.
       return fetch(presigned.url, { method: 'POST', body: formData });
     })
     .then(function (uploadRes) {
@@ -1419,20 +2120,39 @@ function postSubmitJson(id, name, servings, photoKey) {
   var body = {
     id: id,
     name: name,
-    servings: servings
+    servings: servings,
+    csrf: getCsrf()
   };
   if (photoKey) body.photoKey = photoKey;
-  // No explicit Content-Type header — letting fetch default to text/plain
-  // for a plain string body keeps this a CORS-simple request (no preflight),
-  // same trick used by every other API call in this app.
-  return fetch(SUBMIT_URL, { method: 'POST', body: JSON.stringify(body) });
+  return xhrPostJson(SUBMIT_URL, body);
 }
 
 // ─── Screen: Options ──────────────────────────────────────────────────────────
 
+function refreshOptionsAccountRow() {
+  document.getElementById('opt-login-label').textContent = isLoggedIn()
+    ? 'Account (Logged In)'
+    : 'Log In to sync across devices';
+  dbGetAllMySubmissions(function (subs) {
+    if (!subs.length) { document.getElementById('opt-my-foods-count').textContent = ''; return; }
+    var remaining = subs.length;
+    var visible = 0;
+    subs.forEach(function (sub) {
+      dbGetFood(sub.id, function (food) {
+        if (food && food.deleted !== true) visible++;
+        remaining--;
+        if (remaining === 0) {
+          document.getElementById('opt-my-foods-count').textContent = visible ? String(visible) : '';
+        }
+      });
+    });
+  });
+}
+
 function showOptionsPanel() {
   document.getElementById('opt-version').textContent = APP_VERSION;
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
+  refreshOptionsAccountRow();
 
   var err = getLastSyncError();
   var errRow = document.getElementById('opt-sync-error-row');
@@ -1450,6 +2170,16 @@ function showOptionsPanel() {
 }
 
 document.getElementById('opt-clear-db').addEventListener('click', confirmClearLocalDb);
+
+document.getElementById('opt-login').addEventListener('click', function () {
+  if (isLoggedIn()) {
+    openAccountSheet();
+  } else {
+    showLoginEmailPanel();
+  }
+});
+
+document.getElementById('opt-my-foods').addEventListener('click', showMyFoodsPanel);
 
 document.getElementById('opt-show-caffeine').addEventListener('click', function () {
   setShowCaffeine(!getShowCaffeine());
@@ -1536,11 +2266,323 @@ function doClearLocalDb() {
   req.onblocked = function () { window.location.reload(); };
 }
 
+// ─── Screen: My Foods ─────────────────────────────────────────────────────────
+//
+// Status is computed purely from local data — there is no backend endpoint
+// to ask "was my submission approved or rejected" (admin routes aren't
+// reachable by end users at all). A food's own `source` flag (set to
+// 'catalog' only when the normal manifest sync downloads/overwrites it,
+// which only happens once it's actually been approved+exported) is the sole
+// "Approved" signal; the backend's 30-day pending-submission TTL is the
+// basis for "still not there after 30 days ⇒ Rejected".
+
+var MY_FOOD_REJECT_AFTER_DAYS = 30;
+
+var MY_FOOD_STATUS_LABELS = {
+  local: 'Local',
+  pending: 'Approval Pending',
+  approved: 'Approved',
+  rejected: 'Rejected'
+};
+
+function computeMyFoodStatus(submissionRecord, foodRecord) {
+  if (foodRecord && foodRecord.source === 'catalog') return 'approved';
+  if (submissionRecord.submitStatus === 'pending') {
+    var ageDays = (nowSec() - (submissionRecord.submittedAt || 0)) / (24 * 60 * 60);
+    return ageDays < MY_FOOD_REJECT_AFTER_DAYS ? 'pending' : 'rejected';
+  }
+  return 'local';
+}
+
+function showMyFoodsPanel() {
+  renderMyFoodsList(function () {
+    showPanel('panel-my-foods');
+    setSoftkeys('Back', 'SELECT', '');
+  });
+}
+
+function renderMyFoodsList(callback) {
+  dbGetAllMySubmissions(function (subs) {
+    var ul = document.getElementById('my-foods-ul');
+    ul.innerHTML = '';
+    if (!subs.length) {
+      document.getElementById('my-foods-empty').style.display = 'block';
+      if (callback) callback();
+      return;
+    }
+    var remaining = subs.length;
+    var rows = new Array(subs.length); // preserve stable order regardless of which food loads first
+    subs.forEach(function (sub, idx) {
+      dbGetFood(sub.id, function (food) {
+        // A deleted (tombstoned) or altogether-missing food's mySubmissions
+        // row deliberately survives a delete so /sync/foods can still
+        // report it (see deleteMyFood) — it just never renders here.
+        if (!food || food.deleted === true) {
+          rows[idx] = null;
+        } else {
+          var status = computeMyFoodStatus(sub, food);
+          var li = document.createElement('li');
+          li.className = 'options-row my-food-row';
+          li.setAttribute('nav-selectable', 'true');
+          li.setAttribute('data-food-id', sub.id);
+
+          var name = document.createElement('span');
+          name.className = 'options-label';
+          name.textContent = food.name;
+
+          var statusEl = document.createElement('span');
+          statusEl.className = 'options-value my-food-status-' + status;
+          statusEl.textContent = MY_FOOD_STATUS_LABELS[status];
+
+          li.appendChild(name);
+          li.appendChild(statusEl);
+          li.addEventListener('click', function () { openMyFoodActionsSheet(sub.id, status); });
+          rows[idx] = li;
+        }
+
+        remaining--;
+        if (remaining === 0) {
+          var visibleRows = rows.filter(function (row) { return row !== null; });
+          visibleRows.forEach(function (row) { ul.appendChild(row); });
+          document.getElementById('my-foods-empty').style.display = visibleRows.length ? 'none' : 'block';
+          if (callback) callback();
+        }
+      });
+    });
+  });
+}
+
+function openMyFoodActionsSheet(foodId, status) {
+  var items = [];
+  if (status === 'local' || status === 'rejected') {
+    items.push({ label: 'Re-submit for approval', action: function () { closeSheet(); resubmitFood(foodId); } });
+  }
+  items.push({ label: 'Delete', danger: true, action: function () { closeSheet(); deleteMyFood(foodId); } });
+  items.push({ label: 'Cancel', action: function () { closeSheet(); } });
+  openSheet(items, { title: MY_FOOD_STATUS_LABELS[status], note: 'What would you like to do with this food?' });
+}
+
+// Diary history referencing this food is deliberately left intact (matches
+// the app's existing graceful degradation when a diary entry's food can no
+// longer be found — see showServingsPanel).
+function deleteMyFood(foodId) {
+  function afterUiUpdate() {
+    renderMyFoodsList(function () {
+      refreshOptionsAccountRow();
+      showStatus('Deleted', false);
+      syncFoods();
+    });
+  }
+  // A device that's never logged in has nothing to reconcile — a real hard
+  // delete, mySubmissions included. Once it's ever logged in, the `foods`
+  // record becomes a tombstone instead (see dbSoftDeleteFood) — but the
+  // mySubmissions row must survive this delete, not be removed immediately,
+  // since buildFoodsSyncPayload() only ever reports ids it still has a
+  // mySubmissions row for; deleting that row right away would mean the
+  // very next /sync/foods call never learns this id was deleted at all.
+  // renderMyFoodsList already hides any row whose `foods` record is
+  // deleted, so this doesn't linger visibly.
+  if (getEverLoggedIn()) {
+    dbSoftDeleteFood(foodId, function () {
+      if (state.foodsById[foodId]) state.foodsById[foodId].deleted = true;
+      afterUiUpdate();
+    });
+  } else {
+    delete state.foodsById[foodId];
+    state.allFoods = state.allFoods.filter(function (f) { return f.id !== foodId; });
+    var tx = db.transaction('foods', 'readwrite');
+    tx.objectStore('foods').delete(foodId);
+    tx.oncomplete = function () { dbDeleteMySubmission(foodId, afterUiUpdate); };
+    tx.onerror = function () { dbDeleteMySubmission(foodId, afterUiUpdate); };
+  }
+}
+
+// Only ever resends name/servings — the original nutrition-facts photo was
+// uploaded once at creation and was never persisted locally afterward, so a
+// re-submit can't re-attach one.
+function resubmitFood(foodId) {
+  if (!isLoggedIn()) {
+    showStatus('Log in to submit foods', true);
+    showLoginEmailPanel();
+    return;
+  }
+  dbGetFood(foodId, function (food) {
+    if (!food) { showStatus('Food data unavailable', true); return; }
+    postSubmitJson(foodId, food.name, food.servings, null).then(function (res) {
+      if (res && res.status === 200) {
+        dbGetMySubmission(foodId, function (existing) {
+          var record = existing || { id: foodId, createdAt: nowSec() };
+          record.submittedAt = nowSec();
+          record.submitStatus = 'pending';
+          dbPutMySubmission(record, function () {
+            renderMyFoodsList(function () {
+              refreshOptionsAccountRow();
+              showStatus('Submitted for approval', false);
+              syncFoods();
+            });
+          });
+        });
+      } else {
+        showStatus('Could not submit — still Local', true);
+      }
+    }).catch(function () {
+      showStatus('Could not submit — still Local', true);
+    });
+  });
+}
+
+// ─── Screen: Login ────────────────────────────────────────────────────────────
+//
+// Lifted from kaios-shared-list/frontend-v3's own email+OTP flow — same
+// backend auth pattern (backend/lambda/calorie_api/account.py), same UI
+// shape/copy, adapted to this app's softkey conventions.
+
+var _otpRequestInFlight = false;
+var _pendingLoginEmail = null;
+
+function showLoginEmailPanel() {
+  document.getElementById('input-login-email').value = '';
+  showPanel('panel-login-email');
+  setSoftkeys('Back', 'Next', '');
+}
+
+function resetLoginEmailForm() {
+  _otpRequestInFlight = false;
+  document.getElementById('input-login-email').disabled = false;
+}
+
+function submitLoginEmail() {
+  if (_otpRequestInFlight) return;
+  var email = document.getElementById('input-login-email').value.trim();
+  if (!email) {
+    showStatus('Enter your email address', true);
+    return;
+  }
+  _otpRequestInFlight = true;
+  document.getElementById('input-login-email').disabled = true;
+  xhrPostJson(ACCOUNT_OTP_URL, { email: email }).then(function (res) {
+    resetLoginEmailForm();
+    if (res.status === 200) {
+      _pendingLoginEmail = email;
+      showLoginOtpPanel(email);
+    } else {
+      showStatus((res.data && res.data.message) || 'Failed to send code', true);
+    }
+  }).catch(function () {
+    resetLoginEmailForm();
+    showStatus('Network error', true);
+  });
+}
+
+document.getElementById('input-login-email').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitLoginEmail();
+  }
+});
+
+document.getElementById('btn-login-email-privacy').addEventListener('click', function () {
+  openSheet(
+    [{ label: 'Got it', action: function () { closeSheet(); } }],
+    {
+      title: 'What do we do with your email?',
+      note: 'We only use it to send you a one-time sign-in code. The address itself is not stored in our database — only a cryptographic hash is kept so we can recognize you on future visits. After your code is sent, the email address is no longer retained and is not logged.'
+    }
+  );
+});
+
+function showLoginOtpPanel(email) {
+  document.getElementById('login-otp-hint').textContent = 'Code sent to ' + email;
+  document.getElementById('input-login-otp').value = '';
+  showPanel('panel-login-otp');
+  setSoftkeys('Back', 'Verify', '');
+}
+
+function submitLoginOtp() {
+  var otp = document.getElementById('input-login-otp').value.trim();
+  if (!otp) {
+    showStatus('Enter the code from your email', true);
+    return;
+  }
+  xhrPostJson(ACCOUNT_LOGIN_URL, { email: _pendingLoginEmail, otp: otp }).then(function (res) {
+    if (res.status === 200) {
+      var csrf = res.getHeader('x-csrf-token');
+      if (csrf) setCsrf(csrf);
+      markEverLoggedIn();
+      setAuthDotState();
+      showOptionsPanel();
+      showStatus('Logged in', false);
+      runFullSync();
+    } else {
+      var message = (res.data && res.data.message) || 'Incorrect code';
+      var waitMatch = message.match(/(\d+) seconds/);
+      if (waitMatch) {
+        var remaining = parseInt(waitMatch[1], 10);
+        var hintEl = document.getElementById('login-otp-hint');
+        var origHint = hintEl.textContent;
+        var input = document.getElementById('input-login-otp');
+        input.disabled = true;
+        hintEl.textContent = 'Try again in ' + remaining + 's...';
+        var timer = setInterval(function () {
+          remaining -= 1;
+          if (remaining <= 0) {
+            clearInterval(timer);
+            input.disabled = false;
+            hintEl.textContent = origHint;
+          } else {
+            hintEl.textContent = 'Try again in ' + remaining + 's...';
+          }
+        }, 1000);
+      } else {
+        showStatus(message, true);
+      }
+    }
+  }).catch(function () {
+    showStatus('Network error', true);
+  });
+}
+
+document.getElementById('input-login-otp').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitLoginOtp();
+  }
+});
+
+function openAccountSheet() {
+  openSheet(
+    [
+      { label: 'Log Out', action: function () { closeSheet(); logOut(); } },
+      { label: 'Log Out Everywhere', danger: true, action: function () { closeSheet(); logOutAllDevices(); } },
+      { label: 'Cancel', action: function () { closeSheet(); } }
+    ],
+    { title: 'Account', note: 'You are logged in and syncing across devices.' }
+  );
+}
+
+function logOut() {
+  clearCsrf();
+  setAuthDotState();
+  refreshOptionsAccountRow();
+  showStatus('Logged out', false);
+}
+
+function logOutAllDevices() {
+  xhrPostJson(ACCOUNT_LOG_OUT_ALL_URL, { csrf: getCsrf() }).then(function (res) {
+    logOut();
+    showStatus(res.status === 200 ? 'Logged out everywhere' : 'Logged out here, but could not confirm everywhere', res.status !== 200);
+  }).catch(function () {
+    logOut();
+  });
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 applyCaffeineVisibility();
+setAuthDotState();
 
 openDB(function () {
+  purgeOldTombstonesLocally(function () {});
   syncData(
     function onFileStart(index, total, fileEntry) {
       showPanel('panel-loading');
@@ -1567,6 +2609,10 @@ openDB(function () {
               state.lastServings[r.id] = { servingName: r.servingName, quantity: r.quantity };
             });
             showDiaryPanel();
+            if (isLoggedIn()) {
+              accountRefreshIfNeeded();
+              runFullSync();
+            }
           });
         });
       });

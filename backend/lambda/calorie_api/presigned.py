@@ -1,7 +1,14 @@
 import re
 
 from .logger import log
-from .utils import format_response, parse_body, authenticate, get_presigned_s3_client, GUID_REGEX, PHOTOS_BUCKET_NAME
+from .utils import (
+    format_response,
+    authenticate,
+    authenticate_user,
+    get_presigned_s3_client,
+    GUID_REGEX,
+    PHOTOS_BUCKET_NAME,
+)
 
 PHOTO_KEY_REGEX = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|gif|webp)$", re.IGNORECASE
@@ -19,12 +26,15 @@ CONTENT_TYPES = {
     "webp": "image/webp",
 }
 
-MAX_UPLOAD_BYTES = 10_000_000  # 10MB — this endpoint is public/anonymous (unlike the reference it's based
-# on, which sits behind that app's own login), so a size cap is a reasonable guard against abuse.
+MAX_UPLOAD_BYTES = 10_000_000  # 10MB — a size cap is a reasonable guard against abuse even with login required.
 
 
-def presigned_post_route(event):
-    body = parse_body(event.get("body"))
+# Login-required, same as submit_food_route — this is part of the same
+# "create a custom food" flow, and leaving a public presigned-URL endpoint
+# reachable on its own would remain an unauthenticated S3-abuse vector even
+# with /submit itself locked down.
+@authenticate_user
+def presigned_post_route(event, user_id, body):
     food_id = (body.get("id") or "").strip()
     extension = (body.get("extension") or "").strip().lower()
 

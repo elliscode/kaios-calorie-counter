@@ -14,6 +14,14 @@ from calorie_api.utils import (
 from calorie_api.submit import submit_food_route
 from calorie_api.presigned import presigned_post_route, presigned_get_route
 from calorie_api.admin import get_pending_route, review_route, export_route
+from calorie_api.account import (
+    account_otp_route,
+    account_login_route,
+    account_logged_in_check_route,
+    account_log_out_all_route,
+    account_refresh_route,
+)
+from calorie_api.sync import sync_foods_route, sync_diary_route, sync_preferences_route
 
 
 def lambda_handler(event, context):
@@ -72,6 +80,30 @@ def route(event):
         return export_route(event)
     if path_equals(event=event, method="POST", path="/admin/presigned-get"):
         return presigned_get_route(event)
+
+    # End-user accounts (email OTP + cookie session) — a separate identity
+    # system from the admin block above; login is optional for everything
+    # except /submit and /presigned-post below.
+    if path_equals(event=event, method="POST", path="/account/otp"):
+        return account_otp_route(event)
+    if path_equals(event=event, method="POST", path="/account/login"):
+        return account_login_route(event)
+    if path_equals(event=event, method="POST", path="/account/logged-in-check"):
+        return account_logged_in_check_route(event)
+    if path_equals(event=event, method="POST", path="/account/log-out-all"):
+        return account_log_out_all_route(event)
+    if path_equals(event=event, method="POST", path="/account/refresh"):
+        return account_refresh_route(event)
+
+    # Multi-device sync — each route merges the client's payload against
+    # what's already stored (newer "updated" timestamp wins) and returns the
+    # merged result; login-required, same session as the /account/* routes.
+    if path_equals(event=event, method="POST", path="/sync/foods"):
+        return sync_foods_route(event)
+    if path_equals(event=event, method="POST", path="/sync/diary"):
+        return sync_diary_route(event)
+    if path_equals(event=event, method="POST", path="/sync/preferences"):
+        return sync_preferences_route(event)
 
     if path_equals(event=event, method="POST", path="/test"):
         return format_response(event=event, http_code=200, body={"status": "up"})

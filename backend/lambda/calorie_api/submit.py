@@ -1,13 +1,27 @@
 import time
 
-from .utils import format_response, parse_body, parse_servings, python_obj_to_dynamo_obj, dynamo, TABLE_NAME, GUID_REGEX
+from .utils import (
+    format_response,
+    parse_servings,
+    python_obj_to_dynamo_obj,
+    dynamo,
+    TABLE_NAME,
+    GUID_REGEX,
+    authenticate_user,
+    load_encrypted_collection,
+    store_encrypted_collection,
+    decimal_to_number,
+)
 
 SUBMISSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
 
-def submit_food_route(event):
-    body = parse_body(event.get("body"))
-
+# Login-required — a deliberate spam gate on the moderation queue, since this
+# used to be fully anonymous. Also closes the loop with presigned.py's
+# presigned_post_route, gated the same way, so the whole "create a custom
+# food" flow (photo upload included) requires a session end to end.
+@authenticate_user
+def submit_food_route(event, user_id, body):
     food_id = (body.get("id") or "").strip()
     name = (body.get("name") or "").strip()
     servings = parse_servings(body.get("servings"))
@@ -42,5 +56,18 @@ def submit_food_route(event):
             }
         ),
     )
+
+    # Dual-purpose: this same food also lands in the submitter's own synced
+    # foods collection, immediately usable from their account on any device —
+    # independent of whether an admin ever approves it into the shared
+    # catalog above.
+    user_foods = load_encrypted_collection("user_foods", user_id)
+    user_foods[food_id] = {
+        "name": name,
+        "servings": decimal_to_number(servings),
+        "updated": int(time.time()),
+        "deleted": False,
+    }
+    store_encrypted_collection("user_foods", user_id, user_foods)
 
     return format_response(event=event, http_code=200, body={"id": food_id}, log_this=False)

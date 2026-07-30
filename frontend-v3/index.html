@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.5">
-  <link rel="stylesheet" href="css/header.css?v=3.0.5">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.5">
-  <link rel="stylesheet" href="css/input.css?v=3.0.5">
-  <link rel="stylesheet" href="css/list.css?v=3.0.5">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.5">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.5">
+  <link rel="stylesheet" href="css/root.css?v=3.0.6">
+  <link rel="stylesheet" href="css/header.css?v=3.0.6">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.6">
+  <link rel="stylesheet" href="css/input.css?v=3.0.6">
+  <link rel="stylesheet" href="css/list.css?v=3.0.6">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.6">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.6">
 </head>
 <body>
   <div id="root">
@@ -22,6 +22,8 @@
     <div id="panel-loading" class="panel" active="true">
       <div class="header">
         <h1>Loading</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
       </div>
       <div class="panel-content">
         <div class="loading-wrap">
@@ -44,6 +46,8 @@
     <div id="panel-diary" class="panel" active="false">
       <div class="header">
         <h1>Diary</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
       </div>
       <div class="panel-content">
         <button id="btn-diary-add-food" class="search-row add-new" type="button" nav-selectable="true">+ Add Food</button>
@@ -84,6 +88,8 @@
     <div id="panel-search" class="panel" active="false">
       <div class="header">
         <h1>Search</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
       </div>
       <div class="panel-content">
         <input id="input-search" class="search-input" type="text" placeholder="Search foods…" nav-selectable="true">
@@ -94,9 +100,12 @@
     <!-- Panel: Servings -->
     <div id="panel-servings" class="panel" active="false">
       <div class="header">
-        <h1 id="servings-title">Edit Serving</h1>
+        <h1>Edit Serving</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
       </div>
       <div class="panel-content">
+        <p id="servings-food-name" class="servings-food-name"></p>
         <div class="input-wrap">
           <input id="input-serving-qty" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
           <label for="input-serving-qty">Serving size</label>
@@ -137,6 +146,8 @@
     <div id="panel-new-food" class="panel" active="false">
       <div class="header">
         <h1>Add New Food</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
       </div>
       <div class="panel-content">
         <div class="input-wrap">
@@ -188,12 +199,21 @@
     <div id="panel-options" class="panel" active="false">
       <div class="header">
         <h1>Options</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
       </div>
       <div class="panel-content">
         <ul class="item-list">
           <li class="options-row" nav-selectable="true">
             <span class="options-label">Version</span>
             <span class="options-value" id="opt-version"></span>
+          </li>
+          <li class="options-row" id="opt-login" nav-selectable="true">
+            <span class="options-label" id="opt-login-label">Log In to sync across devices</span>
+          </li>
+          <li class="options-row" id="opt-my-foods" nav-selectable="true">
+            <span class="options-label">My Foods</span>
+            <span class="options-value" id="opt-my-foods-count"></span>
           </li>
           <li class="options-row" id="opt-show-caffeine" nav-selectable="true">
             <span class="options-label">Show Caffeine</span>
@@ -213,6 +233,52 @@
             <span class="options-label">Clear Local DB</span>
           </li>
         </ul>
+      </div>
+    </div>
+
+    <!-- Panel: My Foods (nested under Options) -->
+    <div id="panel-my-foods" class="panel" active="false">
+      <div class="header">
+        <h1>My Foods</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <ul id="my-foods-ul" class="item-list"></ul>
+        <p id="my-foods-empty" class="hint" style="display:none">You haven't created any foods yet.</p>
+      </div>
+    </div>
+
+    <!-- Panel: Login — email -->
+    <div id="panel-login-email" class="panel" active="false">
+      <div class="header">
+        <h1>Log In</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <p class="hint">Log in to sync your foods and diary across devices.</p>
+        <div class="input-wrap">
+          <input id="input-login-email" type="email" placeholder=" " autocomplete="email" nav-selectable="true">
+          <label for="input-login-email">Email address</label>
+        </div>
+        <button id="btn-login-email-privacy" class="hint-link" type="button" nav-selectable="true">What do we do with your email?</button>
+      </div>
+    </div>
+
+    <!-- Panel: Login — OTP -->
+    <div id="panel-login-otp" class="panel" active="false">
+      <div class="header">
+        <h1>Enter Code</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <p id="login-otp-hint" class="hint"></p>
+        <div class="input-wrap">
+          <input id="input-login-otp" type="tel" inputmode="numeric" maxlength="6" placeholder=" " nav-selectable="true">
+          <label for="input-login-otp">6-digit code</label>
+        </div>
       </div>
     </div>
 
@@ -239,6 +305,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=3.0.5"></script>
+  <script src="app.js?v=3.0.6"></script>
 </body>
 </html>

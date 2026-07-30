@@ -17,6 +17,30 @@
   flex: 1;
 }
 
+.auth-status-text {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Persistent logged-in/out indicator, present on every panel's header. Uses
+   the app's dark-mode green token (#81C784) for "on" even in light mode —
+   the header's own background is a fixed #2E7D32 (the light-mode green
+   token) in both themes, so that token would be invisible here. */
+.auth-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #c0392b;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.auth-dot.auth-dot-on {
+  background: #81C784;
+}
+
 .header-action-btn {
   background: none;
   border: none;

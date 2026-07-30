@@ -7,20 +7,20 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
 });
 
-test('caffeine row is shown by default', async ({ page }) => {
-  await expect(page.locator('#row-sum-caffeine')).toBeVisible();
+test('caffeine row is hidden by default', async ({ page }) => {
+  await expect(page.locator('#row-sum-caffeine')).not.toBeVisible();
 });
 
-test('toggling Show Caffeine off hides it on Diary and Servings, and persists across reload', async ({ page }) => {
+test('toggling Show Caffeine on shows it on Diary and Servings, and persists across reload', async ({ page }) => {
   await pressSoftKey(page, 'SoftRight'); // Diary -> Options
   await expect(page.locator('#panel-options')).toHaveAttribute('active', 'true');
-  await expect(page.locator('#opt-show-caffeine-value')).toHaveText('On');
-
-  await page.locator('#opt-show-caffeine').click();
   await expect(page.locator('#opt-show-caffeine-value')).toHaveText('Off');
 
+  await page.locator('#opt-show-caffeine').click();
+  await expect(page.locator('#opt-show-caffeine-value')).toHaveText('On');
+
   await pressSoftKey(page, 'SoftLeft'); // back to Diary
-  await expect(page.locator('#row-sum-caffeine')).not.toBeVisible();
+  await expect(page.locator('#row-sum-caffeine')).toBeVisible();
 
   // Add a food and check the Servings panel too.
   await goToSearchFromDiary(page);
@@ -29,17 +29,17 @@ test('toggling Show Caffeine off hides it on Diary and Servings, and persists ac
   await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();
   await page.locator('.food-row').click();
   await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
-  await expect(page.locator('#row-serv-caffeine')).not.toBeVisible();
+  await expect(page.locator('#row-serv-caffeine')).toBeVisible();
 
   // Persists across a reload (same origin/storage).
   await page.goto('/');
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
-  await expect(page.locator('#row-sum-caffeine')).not.toBeVisible();
+  await expect(page.locator('#row-sum-caffeine')).toBeVisible();
 
-  // Toggling back on restores it.
+  // Toggling back off hides it again.
   await pressSoftKey(page, 'SoftRight');
   await page.locator('#opt-show-caffeine').click();
-  await expect(page.locator('#opt-show-caffeine-value')).toHaveText('On');
+  await expect(page.locator('#opt-show-caffeine-value')).toHaveText('Off');
   await pressSoftKey(page, 'SoftLeft');
-  await expect(page.locator('#row-sum-caffeine')).toBeVisible();
+  await expect(page.locator('#row-sum-caffeine')).not.toBeVisible();
 });

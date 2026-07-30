@@ -145,6 +145,18 @@ body.dark .summary-row .summary-label {
   color: #8b8b93;
 }
 
+/* === Servings panel food name === */
+/* The header itself stays a fixed, short "Edit Serving" title — a long food
+   name there would crowd/truncate against the auth status text and dot
+   that now live in every header — so the actual food name is shown here
+   instead, as the first thing in the page content. */
+.servings-food-name {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 4px 4px 12px;
+  word-break: break-word;
+}
+
 /* === Nutrient breakdown (Servings panel) === */
 .nutrient-table {
   margin-top: 10px;
@@ -198,6 +210,43 @@ body.dark .options-row {
 
 body.dark .options-value {
   color: #8b8b93;
+}
+
+/* === My Foods status colors === */
+.my-food-status-local {
+  color: #666;
+}
+
+.my-food-status-pending {
+  color: #666;
+}
+
+.my-food-status-approved {
+  color: #2E7D32;
+}
+
+.my-food-status-rejected {
+  color: #c0392b;
+}
+
+.my-food-row[nav-selected="true"] .my-food-status-local,
+.my-food-row[nav-selected="true"] .my-food-status-pending,
+.my-food-row[nav-selected="true"] .my-food-status-approved,
+.my-food-row[nav-selected="true"] .my-food-status-rejected {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+body.dark .my-food-status-local,
+body.dark .my-food-status-pending {
+  color: #8b8b93;
+}
+
+body.dark .my-food-status-approved {
+  color: #81C784;
+}
+
+body.dark .my-food-status-rejected {
+  color: #e57373;
 }
 
 @media (min-width: 241px) {
