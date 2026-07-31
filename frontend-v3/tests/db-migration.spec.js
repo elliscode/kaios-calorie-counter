@@ -182,3 +182,79 @@ test('pre-existing usageCounts/lastServings rows get an `updated` field backfill
   expect(lastForFood[0].servingName).toBe('g'); // unchanged
   expect(typeof lastForFood[0].updated).toBe('number');
 });
+
+// v5 (recipes/guesstimates) adds no new store/index and its migration block
+// is pure documentation — `type` is a purely additive field nothing v4-era
+// ever wrote, read safely as `undefined` everywhere. This just confirms a
+// v4-shaped install upgrades to v5 cleanly: boots fine, existing records
+// are completely untouched (no `type` field magically appears on them).
+test('a v4-shaped install upgrades to v5 as a true no-op — app boots, existing records untouched', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  await page.evaluate(function () {
+    return new Promise(function (resolve, reject) {
+      if (window.db) { window.db.close(); window.db = null; }
+      var delReq = indexedDB.deleteDatabase('kaios-calorie-counter');
+      delReq.onsuccess = function () { resolve(); };
+      delReq.onblocked = function () { resolve(); };
+      delReq.onerror = function () { reject(delReq.error); };
+    });
+  });
+
+  await page.evaluate(function (id) {
+    return new Promise(function (resolve, reject) {
+      var req = indexedDB.open('kaios-calorie-counter', 4);
+      req.onupgradeneeded = function (e) {
+        var d = e.target.result;
+        d.createObjectStore('foods', { keyPath: 'id' });
+        var diaryStore = d.createObjectStore('diary', { keyPath: 'id', autoIncrement: true });
+        diaryStore.createIndex('byDate', 'date', { unique: false });
+        d.createObjectStore('syncedFiles', { keyPath: 'id' });
+        d.createObjectStore('usageCounts', { keyPath: 'id' });
+        d.createObjectStore('lastServings', { keyPath: 'id' });
+        d.createObjectStore('mySubmissions', { keyPath: 'id' });
+      };
+      req.onsuccess = function (e) {
+        var v4db = e.target.result;
+        var tx = v4db.transaction(['foods', 'diary'], 'readwrite');
+        tx.objectStore('foods').add({
+          id: id, name: 'A v4 Food', source: 'local', updated: 1700000000, deleted: false,
+          servings: [{ name: 'g', quantity: 100, calories: 50, fat: 0, carbohydrates: 0, protein: 0 }]
+        });
+        tx.objectStore('diary').add({
+          date: '2026-02-01', foodId: id, foodName: 'A v4 Food', guid: 'fixed-test-guid',
+          servingName: 'g', quantity: 100, calories: 50, fat: 0, carbohydrates: 0, protein: 0,
+          updated: 1700000000, deleted: false
+        });
+        tx.oncomplete = function () { v4db.close(); resolve(); };
+        tx.onerror = function (ev) { reject(ev.target.error); };
+      };
+      req.onerror = function () { reject(req.error); };
+    });
+  }, LOCAL_GUID);
+
+  await page.evaluate(function () {
+    return new Promise(function (resolve) { window.openDB(function () { resolve(); }); });
+  });
+
+  var food = await page.evaluate(function (id) {
+    return new Promise(function (resolve) { window.dbGetFood(id, resolve); });
+  }, LOCAL_GUID);
+  expect(food.name).toBe('A v4 Food');
+  expect(food.source).toBe('local');
+  expect(food.updated).toBe(1700000000); // untouched, not bumped to "now"
+  expect(food.type).toBeUndefined();
+
+  var entries = await page.evaluate(function () {
+    return new Promise(function (resolve) { window.dbGetDiaryByDate('2026-02-01', resolve); });
+  });
+  expect(entries.length).toBe(1);
+  expect(entries[0].guid).toBe('fixed-test-guid');
+  expect(entries[0].updated).toBe(1700000000);
+  expect(entries[0].type).toBeUndefined();
+
+  // App still boots and functions normally afterward.
+  await page.reload();
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+});

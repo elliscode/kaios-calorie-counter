@@ -98,25 +98,57 @@ body.dark .food-row {
   color: #fff;
 }
 
-.search-row.add-new {
+.search-row.add-new,
+.search-row.add-new-recipe,
+.search-row.add-new-guesstimate {
   color: #2E7D32;
   font-weight: 600;
+}
+
+/* Only the first of the three CTA rows gets the divider — it's the
+   boundary between real results and the "create something new" rows. */
+.search-row.add-new {
   border-top: 1px solid #ddd;
   margin-top: 4px;
 }
 
-.search-row.add-new[nav-selected="true"] {
+.search-row.add-new[nav-selected="true"],
+.search-row.add-new-recipe[nav-selected="true"],
+.search-row.add-new-guesstimate[nav-selected="true"] {
   background: #388E3C;
   color: #fff;
 }
 
-body.dark .search-row.add-new {
+body.dark .search-row.add-new,
+body.dark .search-row.add-new-recipe,
+body.dark .search-row.add-new-guesstimate {
   color: #81C784;
+}
+
+body.dark .search-row.add-new {
   border-top-color: #2e2e30;
 }
 
 body.dark .search-row {
   border-bottom-color: #2e2e30;
+}
+
+/* Small badge distinguishing a recipe from a plain food in search results. */
+.recipe-tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #666;
+}
+
+.search-row[nav-selected="true"] .recipe-tag {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+body.dark .recipe-tag {
+  color: #8b8b93;
 }
 
 /* === Summary table (Diary) === */

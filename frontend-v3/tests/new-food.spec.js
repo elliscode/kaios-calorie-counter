@@ -13,23 +13,27 @@ test.beforeEach(async ({ page }) => {
   await goToSearchFromDiary(page);
 });
 
-test('"+ Add new food" is the only row when a search has zero matches', async ({ page }) => {
+test('"+ Add new food", "+ Add new recipe", and "+ Add guesstimate" are the only rows when a search has zero matches', async ({ page }) => {
   await page.fill('#input-search', 'zzzznonexistentfood');
   await page.waitForTimeout(250);
 
   var rows = page.locator('#panel-search .search-row');
-  await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toHaveText('+ Add new food');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toHaveText('+ Add new food');
+  await expect(rows.nth(1)).toHaveText('+ Add new recipe');
+  await expect(rows.nth(2)).toHaveText('+ Add guesstimate');
 });
 
-test('"+ Add new food" is still the last row even when there are real matches', async ({ page }) => {
+test('the three "+ Add..." rows are still last, in order, even when there are real matches', async ({ page }) => {
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);
 
   var rows = page.locator('#panel-search .search-row');
-  await expect(rows.last()).toHaveText('+ Add new food');
   var count = await rows.count();
-  expect(count).toBeGreaterThan(1);
+  expect(count).toBeGreaterThan(3);
+  await expect(rows.nth(count - 3)).toHaveText('+ Add new food');
+  await expect(rows.nth(count - 2)).toHaveText('+ Add new recipe');
+  await expect(rows.nth(count - 1)).toHaveText('+ Add guesstimate');
 });
 
 test('submitting the form logs a diary entry, works offline (API not built yet), and the food becomes searchable', async ({ page }) => {

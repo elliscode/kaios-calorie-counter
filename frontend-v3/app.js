@@ -16,10 +16,13 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.7';
+var APP_VERSION = '3.0.8';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
-var NON_NUTRIENT_KEYS = ['id', 'date', 'foodId', 'foodName', 'servingName', 'quantity', 'name'];
+var NON_NUTRIENT_KEYS = [
+  'id', 'date', 'foodId', 'foodName', 'servingName', 'quantity', 'name',
+  'guid', 'updated', 'deleted', 'type'
+];
 
 var state = {
   currentDate: todayStr(),
@@ -30,7 +33,17 @@ var state = {
   tray: [],
   diaryEntries: [],
   editingEntry: null,
-  editingFood: null
+  editingFood: null,
+  // 'diary' (normal) or 'recipe-ingredient' (picking a food to add as a
+  // recipe ingredient instead of logging it) — see showSearchPanel() /
+  // showSearchPanelForRecipeIngredient(), which are the only two entry
+  // points into Search and each set this explicitly, so it never leaks.
+  searchMode: 'diary',
+  // 'diary' (normal, editing a diary entry) or 'recipe-ingredient' (picking
+  // a quantity/unit for a food being added to a recipe) — see
+  // showServingsPanel() / showRecipeIngredientQtyPanel().
+  servingsMode: 'diary',
+  recipeBuilder: null
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -200,7 +213,7 @@ function showStatus(msg, isError) {
 
 var db = null;
 var DB_NAME = 'kaios-calorie-counter';
-var DB_VERSION = 4;
+var DB_VERSION = 5;
 
 function openDB(callback) {
   var req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -335,6 +348,19 @@ function openDB(callback) {
           lastServingStore.put(rec);
         });
       };
+    }
+
+    if (e.oldVersion < 5) {
+      // v5: recipes and guesstimates. Neither needs a new store or index —
+      // a recipe is just a `foods` record with type:'recipe' (+ ingredients/
+      // servingsCount) alongside plain foods, which simply have no `type`
+      // (read as `!== 'recipe'` everywhere); a guesstimate is just a `diary`
+      // record with type:'guesstimate' and foodId:null, alongside plain
+      // diary entries (no `type`). Both fields are purely additive with a
+      // safe undefined default on every pre-existing record — there is
+      // genuinely nothing to backfill. This block exists purely as living
+      // documentation of the v5 shape change, mirroring every prior
+      // version's block.
     }
   };
   req.onsuccess = function (e) {
@@ -768,34 +794,52 @@ function upsertStateFood(food) {
   if (idx === -1) state.allFoods.push(food); else state.allFoods[idx] = food;
 }
 
+// Enumerates every food id this account needs to keep in sync: anything
+// with a mySubmissions bookkeeping row (foods submitted for catalog review)
+// PLUS every local recipe (recipes never go through /submit, so they never
+// get a mySubmissions row of their own, but they still need to sync).
+// Forwards a food's fields generically rather than a name/servings-only
+// whitelist, so a recipe's extra `type`/`ingredients`/`servingsCount`
+// fields survive the round trip — the backend's own merge already passes
+// through unknown fields unchanged, this was purely a client-side gap.
 function buildFoodsSyncPayload(callback) {
   dbGetAllMySubmissions(function (subs) {
-    if (!subs.length) { callback({}); return; }
-    var payload = {};
-    var remaining = subs.length;
-    subs.forEach(function (sub) {
-      dbGetFood(sub.id, function (food) {
-        if (food) {
-          payload[sub.id] = {
-            name: food.name,
-            servings: food.servings,
-            updated: food.updated || nowSec(),
-            deleted: food.deleted === true
-          };
-        }
-        remaining--;
-        if (remaining === 0) callback(payload);
+    dbGetAllFoods(function (allFoods) {
+      var ids = {};
+      subs.forEach(function (s) { ids[s.id] = true; });
+      allFoods.forEach(function (f) {
+        if (f.type === 'recipe' && f.source === 'local') ids[f.id] = true;
+      });
+      var idList = Object.keys(ids);
+      if (!idList.length) { callback({}); return; }
+      var payload = {};
+      var remaining = idList.length;
+      idList.forEach(function (id) {
+        dbGetFood(id, function (food) {
+          if (food) {
+            var item = { updated: food.updated || nowSec(), deleted: food.deleted === true };
+            Object.keys(food).forEach(function (k) {
+              if (k === 'id' || k === 'source' || k === 'updated' || k === 'deleted') return;
+              item[k] = food[k]; // name, servings, and — for recipes — type/ingredients/servingsCount
+            });
+            payload[id] = item;
+          }
+          remaining--;
+          if (remaining === 0) callback(payload);
+        });
       });
     });
   });
 }
 
-// `merged` is {foodId: {name, servings, updated, deleted}}. If a food is
-// already known locally as a real catalog entry (source:'catalog' — i.e. it
-// was already approved+exported and downloaded via the normal manifest
-// sync), that status wins and is never demoted back to 'local' by this
-// merge, even though this same id is also present in the account's own
-// synced-foods collection server-side.
+// `merged` is {foodId: {...fields, updated, deleted}}. If a food is already
+// known locally as a real catalog entry (source:'catalog' — i.e. it was
+// already approved+exported and downloaded via the normal manifest sync),
+// that status wins and is never demoted back to 'local' by this merge, even
+// though this same id is also present in the account's own synced-foods
+// collection server-side. Forwards fields generically, same reasoning as
+// buildFoodsSyncPayload above — a recipe's extra fields must survive coming
+// back in too, not just going out.
 function applyFoodsSyncMerge(merged, callback) {
   var ids = Object.keys(merged);
   if (!ids.length) { callback(); return; }
@@ -804,14 +848,8 @@ function applyFoodsSyncMerge(merged, callback) {
     var item = merged[id];
     dbGetFood(id, function (existing) {
       var isCatalog = existing && existing.source === 'catalog';
-      var food = {
-        id: id,
-        name: item.name,
-        servings: item.servings,
-        updated: item.updated,
-        deleted: !!item.deleted,
-        source: isCatalog ? 'catalog' : 'local'
-      };
+      var food = { id: id, source: isCatalog ? 'catalog' : 'local' };
+      Object.keys(item).forEach(function (k) { food[k] = item[k]; });
       dbBulkPutFoods([food], function () {
         upsertStateFood(food);
         remaining--;
@@ -827,9 +865,14 @@ function applyFoodsSyncMerge(merged, callback) {
 // `foods` store but never show up in device B's My Foods list. `submittedAt`
 // here is only an approximation (device B was never told the true original
 // submission time) — the very next status check still resolves correctly
-// against the catalog regardless.
+// against the catalog regardless. Recipes are explicitly excluded — they
+// never go through catalog submission, so a recipe synced down from
+// another device must never get a spurious mySubmissions row (which would
+// leak it into My Foods with a bogus status).
 function reconcileMySubmissionsFromFoodsSync(merged, callback) {
-  var ids = Object.keys(merged).filter(function (id) { return merged[id].deleted !== true; });
+  var ids = Object.keys(merged).filter(function (id) {
+    return merged[id].deleted !== true && merged[id].type !== 'recipe';
+  });
   if (!ids.length) { callback(); return; }
   dbGetAllMySubmissions(function (subs) {
     var known = {};
@@ -1081,13 +1124,27 @@ function updateSoftkeysForFocus() {
     var onAddFood = focusedEl && focusedEl.id === 'btn-diary-add-food';
     setSoftkeys('', onAddFood ? 'Add' : 'Edit', 'Options');
   } else if (panel.id === 'panel-search') {
-    var label = state.tray.length ? ('Add (' + (state.tray.length + 1) + ')') : 'Add';
-    setSoftkeys('Back', label, 'Tray');
+    if (state.searchMode === 'recipe-ingredient') {
+      setSoftkeys('Back', 'Select', '');
+    } else {
+      var label = state.tray.length ? ('Add (' + (state.tray.length + 1) + ')') : 'Add';
+      setSoftkeys('Back', label, 'Tray');
+    }
   } else if (panel.id === 'panel-servings') {
-    setSoftkeys('Back', 'Save', 'Delete');
+    if (state.servingsMode === 'recipe-ingredient') {
+      setSoftkeys('Back', 'Add', '');
+    } else {
+      setSoftkeys('Back', 'Save', 'Delete');
+    }
   } else if (panel.id === 'panel-new-food') {
     var onSubmitBtn = isNewFoodSubmitBtn(focused());
     setSoftkeys('Back', onSubmitBtn ? 'Submit' : 'Next', '');
+  } else if (panel.id === 'panel-recipe-builder') {
+    var onRecipeSubmit = focused() && focused().id === 'btn-recipe-submit';
+    setSoftkeys('Back', onRecipeSubmit ? 'Save Recipe' : 'Next', '');
+  } else if (panel.id === 'panel-guesstimate') {
+    var onGuessSubmit = focused() && focused().id === 'btn-guesstimate-submit';
+    setSoftkeys('Back', onGuessSubmit ? 'Add' : 'Next', '');
   } else if (panel.id === 'panel-options') {
     setSoftkeys('Back', 'SELECT', '');
   } else if (panel.id === 'panel-login-email') {
@@ -1095,6 +1152,8 @@ function updateSoftkeysForFocus() {
   } else if (panel.id === 'panel-login-otp') {
     setSoftkeys('Back', 'Verify', '');
   } else if (panel.id === 'panel-my-foods') {
+    setSoftkeys('Back', 'SELECT', '');
+  } else if (panel.id === 'panel-my-recipes') {
     setSoftkeys('Back', 'SELECT', '');
   }
 }
@@ -1352,11 +1411,23 @@ function handleSoftLeft() {
   var panel = activePanel();
   if (!panel) return;
   if (panel.id === 'panel-search') {
-    state.tray = [];
-    showDiaryPanel();
+    if (state.searchMode === 'recipe-ingredient') {
+      resumeRecipeBuilderPanel();
+    } else {
+      state.tray = [];
+      showDiaryPanel();
+    }
   } else if (panel.id === 'panel-servings') {
-    showDiaryPanel();
+    if (state.servingsMode === 'recipe-ingredient') {
+      resumeRecipeBuilderPanel();
+    } else {
+      showDiaryPanel();
+    }
   } else if (panel.id === 'panel-new-food') {
+    returnToSearchPanel();
+  } else if (panel.id === 'panel-recipe-builder') {
+    returnToSearchPanel();
+  } else if (panel.id === 'panel-guesstimate') {
     returnToSearchPanel();
   } else if (panel.id === 'panel-options') {
     showDiaryPanel();
@@ -1365,6 +1436,8 @@ function handleSoftLeft() {
   } else if (panel.id === 'panel-login-otp') {
     showLoginEmailPanel();
   } else if (panel.id === 'panel-my-foods') {
+    showOptionsPanel();
+  } else if (panel.id === 'panel-my-recipes') {
     showOptionsPanel();
   }
   // panel-diary: no left-softkey action
@@ -1376,9 +1449,9 @@ function handleSoftRight() {
   if (panel.id === 'panel-diary') {
     showOptionsPanel();
   } else if (panel.id === 'panel-search') {
-    addFocusedToTray();
+    if (state.searchMode !== 'recipe-ingredient') addFocusedToTray();
   } else if (panel.id === 'panel-servings') {
-    deleteCurrentEntry();
+    if (state.servingsMode !== 'recipe-ingredient') deleteCurrentEntry();
   }
   // panel-options: no right-softkey action
 }
@@ -1393,12 +1466,17 @@ document.getElementById('sk-center').addEventListener('click', function () {
   if (!panel) return;
   if (panel.id === 'panel-search') {
     var food = getFocusedFood();
-    if (food) commitFoodAndTray(food);
-    else showStatus('Select a food first', true);
+    if (!food) { showStatus('Select a food first', true); return; }
+    if (state.searchMode === 'recipe-ingredient') showRecipeIngredientQtyPanel(food);
+    else commitFoodAndTray(food);
   } else if (panel.id === 'panel-servings') {
-    saveServingsEdit();
+    servingsCenterAction();
   } else if (panel.id === 'panel-new-food') {
     newFoodCenterAction();
+  } else if (panel.id === 'panel-recipe-builder') {
+    recipeBuilderCenterAction();
+  } else if (panel.id === 'panel-guesstimate') {
+    guesstimateCenterAction();
   } else if (panel.id === 'panel-login-email') {
     submitLoginEmail();
   } else if (panel.id === 'panel-login-otp') {
@@ -1486,11 +1564,24 @@ function renderDiarySummary(entries) {
 // ─── Screen: Search ───────────────────────────────────────────────────────────
 
 function showSearchPanel() {
+  state.searchMode = 'diary';
   state.tray = [];
   showPanel('panel-search');
   document.getElementById('input-search').value = '';
   renderSearchResults('');
   setSoftkeys('Back', 'Add', 'Tray');
+}
+
+// Picking a food to add as a recipe ingredient instead of logging it — see
+// showRecipeIngredientQtyPanel(), which is where picking a result actually
+// goes in this mode instead of committing straight to the diary.
+function showSearchPanelForRecipeIngredient() {
+  state.searchMode = 'recipe-ingredient';
+  state.tray = [];
+  showPanel('panel-search');
+  document.getElementById('input-search').value = '';
+  renderSearchResults('');
+  setSoftkeys('Back', 'Select', '');
 }
 
 // Returning from New Food's Back action — unlike showSearchPanel(), this
@@ -1510,8 +1601,13 @@ function renderSearchResults(query) {
   var ul = document.getElementById('search-ul');
   ul.innerHTML = '';
   var q = query.trim().toLowerCase();
+  var pickingIngredient = state.searchMode === 'recipe-ingredient';
   var results = q ? state.allFoods.filter(function (f) {
-    return f.deleted !== true && f.name.toLowerCase().indexOf(q) !== -1;
+    if (f.deleted === true) return false;
+    // A recipe can't be an ingredient of another recipe — keeps nutrition
+    // baked-in-once at each level, no chained/nested recompute chains.
+    if (pickingIngredient && f.type === 'recipe') return false;
+    return f.name.toLowerCase().indexOf(q) !== -1;
   }).sort(function (a, b) {
     var countA = state.usageCounts[a.id] || 0;
     var countB = state.usageCounts[b.id] || 0;
@@ -1524,20 +1620,50 @@ function renderSearchResults(query) {
     li.className = 'search-row' + (trayHasFood(food.id) ? ' in-tray' : '');
     li.setAttribute('nav-selectable', 'true');
     li.setAttribute('data-food-id', food.id);
-    li.textContent = food.name;
-    li.addEventListener('click', function () { commitFoodAndTray(food); });
+    if (food.type === 'recipe') {
+      var nameSpan = document.createElement('span');
+      nameSpan.textContent = food.name;
+      var tag = document.createElement('span');
+      tag.className = 'recipe-tag';
+      tag.textContent = 'Recipe';
+      li.appendChild(nameSpan);
+      li.appendChild(tag);
+    } else {
+      li.textContent = food.name;
+    }
+    li.addEventListener('click', function () {
+      if (pickingIngredient) showRecipeIngredientQtyPanel(food);
+      else commitFoodAndTray(food);
+    });
     ul.appendChild(li);
   });
 
-  // Always the last row for any non-empty query — whether there are 0 or 50
-  // real matches above it.
-  if (q) {
+  // Always the last rows, even with an empty query (i.e. visible the
+  // moment Search opens, not just once you start typing) — whether there
+  // are 0 or 50 real matches above them. Not shown while picking a recipe
+  // ingredient — a guesstimate has no food record to pick as an ingredient,
+  // and nesting the recipe builder inside itself isn't supported.
+  if (!pickingIngredient) {
     var addNew = document.createElement('li');
     addNew.className = 'search-row add-new';
     addNew.setAttribute('nav-selectable', 'true');
     addNew.textContent = '+ Add new food';
     addNew.addEventListener('click', function () { showNewFoodPanel(query.trim()); });
     ul.appendChild(addNew);
+
+    var addRecipe = document.createElement('li');
+    addRecipe.className = 'search-row add-new-recipe';
+    addRecipe.setAttribute('nav-selectable', 'true');
+    addRecipe.textContent = '+ Add new recipe';
+    addRecipe.addEventListener('click', function () { showRecipeBuilderPanel(query.trim()); });
+    ul.appendChild(addRecipe);
+
+    var addGuess = document.createElement('li');
+    addGuess.className = 'search-row add-new-guesstimate';
+    addGuess.setAttribute('nav-selectable', 'true');
+    addGuess.textContent = '+ Add guesstimate';
+    addGuess.addEventListener('click', function () { showGuesstimatePanel(query.trim()); });
+    ul.appendChild(addGuess);
   }
 }
 
@@ -1633,13 +1759,40 @@ function buildDiaryEntry(food, servingObj, qty) {
   return entry;
 }
 
+// Same shape/scaling as buildDiaryEntry, but for editing an entry with no
+// backing food record (every guesstimate) — scales straight off the
+// synthesized baseline from currentServingBaseline() instead of a real
+// food's serving. E.g. doubling the quantity on a guesstimate scales its
+// calorie guess linearly, same as any other entry.
+function buildDiaryEntryFromBaseline(entry, baseline, qty) {
+  var scale = baseline.quantity ? (qty / baseline.quantity) : 0;
+  var updated = {
+    date: entry.date,
+    foodId: entry.foodId,
+    foodName: entry.foodName,
+    servingName: baseline.name,
+    quantity: qty,
+    guid: generateGuid(),
+    updated: nowSec(),
+    deleted: false
+  };
+  if (entry.type) updated.type = entry.type;
+  Object.keys(baseline).forEach(function (key) {
+    if (key === 'name' || key === 'quantity') return;
+    updated[key] = round2(baseline[key] * scale);
+  });
+  return updated;
+}
+
 // ─── Screen: Servings ─────────────────────────────────────────────────────────
 
 function showServingsPanel(entry) {
+  state.servingsMode = 'diary';
   state.editingEntry = entry;
   state.editingFood = state.foodsById[entry.foodId] || null;
 
   showPanel('panel-servings');
+  document.getElementById('servings-panel-title').textContent = 'Edit Serving';
   document.getElementById('servings-food-name').textContent = entry.foodName;
   document.getElementById('input-serving-qty').value = formatQty(entry.quantity);
 
@@ -1658,10 +1811,24 @@ function showServingsPanel(entry) {
   setSoftkeys('Back', 'Save', 'Delete');
 }
 
+// When there's a backing food (the normal case), the baseline is one of
+// its actual serving definitions. When there isn't — every guesstimate, by
+// design, plus any diary entry whose food was later deleted — synthesize a
+// baseline straight from the entry's own snapshot, so editing quantity
+// still scales it linearly instead of hard-failing.
 function currentServingBaseline() {
-  if (!state.editingFood) return null;
-  var name = document.getElementById('input-serving-name').value;
-  return state.editingFood.servings.filter(function (s) { return s.name === name; })[0] || null;
+  if (state.editingFood) {
+    var name = document.getElementById('input-serving-name').value;
+    return state.editingFood.servings.filter(function (s) { return s.name === name; })[0] || null;
+  }
+  var entry = state.editingEntry;
+  if (!entry) return null;
+  var baseline = { name: entry.servingName, quantity: entry.quantity || 1 };
+  Object.keys(entry).forEach(function (key) {
+    if (NON_NUTRIENT_KEYS.indexOf(key) !== -1) return;
+    baseline[key] = entry[key];
+  });
+  return baseline;
 }
 
 function renderServingsPreview() {
@@ -1729,7 +1896,7 @@ document.getElementById('input-serving-qty').addEventListener('input', function 
 document.getElementById('input-serving-qty').addEventListener('keydown', function (e) {
   if (e.key === 'Enter') {
     e.preventDefault();
-    saveServingsEdit();
+    servingsCenterAction();
   }
 });
 
@@ -1744,12 +1911,15 @@ function saveServingsEdit() {
     showStatus('Could not save (food data unavailable)', true);
     return;
   }
-  var updated = buildDiaryEntry(state.editingFood, baseline, qty);
+  var updated = state.editingFood
+    ? buildDiaryEntry(state.editingFood, baseline, qty)
+    : buildDiaryEntryFromBaseline(state.editingEntry, baseline, qty);
   // Preserve the entry's original guid across an edit — it's the /sync/diary
   // merge key, and a fresh one here would make the server treat this as a
   // brand new entry rather than an update to the existing one.
   updated.guid = state.editingEntry.guid || updated.guid;
   dbUpdateDiaryEntry(state.editingEntry.id, updated, function () {
+    if (!state.editingFood) { showDiaryPanel(); syncAfterDiaryMutation(); return; }
     rememberServing(state.editingFood.id, baseline.name, qty, function () {
       showDiaryPanel();
       syncAfterDiaryMutation();
@@ -1757,11 +1927,79 @@ function saveServingsEdit() {
   });
 }
 
+// panel-servings does double duty — editing a diary entry's quantity
+// (normal) or picking a quantity/unit for a food being added to a recipe's
+// ingredient list (see showRecipeIngredientQtyPanel below). Both the qty
+// field's own Enter handler and the #sk-center click table dispatch here
+// rather than hardcoding saveServingsEdit(), so a stray Enter while
+// building a recipe never accidentally tries to save a nonexistent diary
+// entry.
+function servingsCenterAction() {
+  if (state.servingsMode === 'recipe-ingredient') addServingAsRecipeIngredient();
+  else saveServingsEdit();
+}
+
+// Reuses panel-servings' qty+unit picker UI for "how much of this food goes
+// in the recipe" instead of building a parallel panel — same fields, same
+// live preview, just a different destination for the result. No diary
+// entry backs this, so state.editingEntry stays null.
+function showRecipeIngredientQtyPanel(food) {
+  state.servingsMode = 'recipe-ingredient';
+  state.editingFood = food;
+  state.editingEntry = null;
+
+  showPanel('panel-servings');
+  document.getElementById('servings-panel-title').textContent = 'Ingredient Quantity';
+  document.getElementById('servings-food-name').textContent = food.name;
+
+  var def = defaultServingForFood(food); // pre-fill with this food's last-used qty/serving, same as adding it normally would
+  document.getElementById('input-serving-qty').value = formatQty(def.quantity);
+
+  var select = document.getElementById('input-serving-name');
+  select.innerHTML = '';
+  food.servings.forEach(function (s) {
+    var opt = document.createElement('option');
+    opt.value = s.name;
+    opt.textContent = s.name;
+    if (s.name === def.serving.name) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  renderServingsPreview();
+  setSoftkeys('Back', 'Add', '');
+}
+
+function addServingAsRecipeIngredient() {
+  var qty = parseFloat(document.getElementById('input-serving-qty').value) || 0;
+  var baseline = currentServingBaseline();
+  if (!baseline || !qty) {
+    showStatus('Enter a quantity', true);
+    return;
+  }
+  state.recipeBuilder.ingredients.push({
+    foodId: state.editingFood.id,
+    foodName: state.editingFood.name,
+    servingName: baseline.name,
+    quantity: qty
+  });
+  resumeRecipeBuilderPanel();
+}
+
 function deleteCurrentEntry() {
   if (!state.editingEntry) return;
   var entry = state.editingEntry;
   var foodId = entry.foodId;
   function afterDelete() {
+    // A guesstimate has no backing food (foodId is null) — nothing to
+    // decrement. null isn't a valid IndexedDB key at all, so calling
+    // dbDecrementUsageCount(null, ...) would throw synchronously rather
+    // than just silently no-op.
+    if (!foodId) {
+      showDiaryPanel();
+      showStatus('Deleted', false);
+      syncAfterDiaryMutation();
+      return;
+    }
     state.usageCounts[foodId] = Math.max(0, (state.usageCounts[foodId] || 0) - 1);
     dbDecrementUsageCount(foodId, function () {
       showDiaryPanel();
@@ -1824,17 +2062,20 @@ function wireNumericField(el) {
   });
 }
 
-function wireAdvanceOnEnter(el) {
+// Generic across every "step through fields, only Submit actually submits"
+// panel (New Food, and now Recipe Builder / Guesstimate) — each just passes
+// its own center-action dispatcher.
+function wireAdvanceOnEnter(el, centerActionFn) {
   el.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
       e.preventDefault();
       // Without this, the keydown would keep bubbling to the document-level
-      // handler after newFoodCenterAction() has already moved focus — if
-      // that landed on the Submit button, its "non-text-input" Enter case
-      // would immediately fire too, submitting on the very keystroke that
-      // was only meant to move focus onto the button.
+      // handler after centerActionFn() has already moved focus — if that
+      // landed on the Submit button, its "non-text-input" Enter case would
+      // immediately fire too, submitting on the very keystroke that was
+      // only meant to move focus onto the button.
       e.stopPropagation();
-      newFoodCenterAction();
+      centerActionFn();
     }
   });
 }
@@ -1844,7 +2085,7 @@ NEW_FOOD_NUMERIC_FIELDS.forEach(function (id) {
 });
 
 NEW_FOOD_NUMERIC_FIELDS.concat(['input-new-food-name', 'input-new-food-serving-name']).forEach(function (id) {
-  wireAdvanceOnEnter(document.getElementById(id));
+  wireAdvanceOnEnter(document.getElementById(id), newFoodCenterAction);
 });
 
 document.getElementById('btn-new-food-submit').addEventListener('click', submitNewFood);
@@ -1905,7 +2146,7 @@ function addExtraServingBlock() {
     wrap.appendChild(inputWrap);
 
     if (f.numeric) wireNumericField(input);
-    wireAdvanceOnEnter(input);
+    wireAdvanceOnEnter(input, newFoodCenterAction);
   });
 
   // Placed after the fields, not before — a D-pad nav-selectable Remove
@@ -2138,6 +2379,288 @@ function postSubmitJson(id, name, servings, photoKey) {
   return xhrPostJson(SUBMIT_URL, body);
 }
 
+// ─── Screen: Guesstimate ────────────────────────────────────────────────────
+//
+// Deliberately minimal — just a name and a calorie guess, nothing else.
+// The whole point is speed: a vague, in-the-moment estimate that's at least
+// named (unlike a typical "quick add" with no way to remember what it was
+// later). Logs straight into today's diary with no backing food record —
+// never becomes a reusable/searchable food, never touches /submit.
+
+function showGuesstimatePanel(prefillName) {
+  document.getElementById('input-guesstimate-name').value = prefillName || '';
+  document.getElementById('input-guesstimate-calories').value = '';
+  showPanel('panel-guesstimate');
+}
+
+document.getElementById('input-guesstimate-calories').addEventListener('input', function (e) {
+  sanitizeQtyInput(e.target);
+});
+
+function guesstimateCenterAction() {
+  var el = focused();
+  if (el && el.id === 'btn-guesstimate-submit') submitGuesstimate();
+  else moveFocus('down');
+}
+
+wireAdvanceOnEnter(document.getElementById('input-guesstimate-name'), guesstimateCenterAction);
+wireAdvanceOnEnter(document.getElementById('input-guesstimate-calories'), guesstimateCenterAction);
+document.getElementById('btn-guesstimate-submit').addEventListener('click', submitGuesstimate);
+
+function submitGuesstimate() {
+  var name = document.getElementById('input-guesstimate-name').value.trim();
+  var calories = parseFloat(document.getElementById('input-guesstimate-calories').value);
+
+  if (!name || isNaN(calories)) {
+    showStatus('Name and calories are required', true);
+    return;
+  }
+
+  var entry = {
+    date: state.currentDate,
+    foodId: null,
+    foodName: name,
+    servingName: 'guess',
+    quantity: 1,
+    calories: round2(calories),
+    fat: 0,
+    carbohydrates: 0,
+    protein: 0,
+    type: 'guesstimate',
+    guid: generateGuid(),
+    updated: nowSec(),
+    deleted: false
+  };
+
+  dbAddDiaryEntry(entry, function () {
+    showDiaryPanel();
+    showStatus('Added ' + name, false);
+    syncAfterDiaryMutation();
+  });
+}
+
+// ─── Screen: Recipe Builder ─────────────────────────────────────────────────
+//
+// A recipe is stored as a normal `foods` record (type:'recipe') so it gets
+// search/diary/sync for free — see the ingredients snapshot below for why
+// that's safe even if an ingredient food is later edited/deleted. Its
+// nutrition-per-serving is baked in once at Save time, never recomputed
+// later from the ingredient list.
+
+function showRecipeBuilderPanel(prefillName) {
+  state.recipeBuilder = { ingredients: [] };
+  document.getElementById('input-recipe-name').value = prefillName || '';
+  document.getElementById('input-recipe-servings-count').value = '1';
+  renderRecipeIngredientsList();
+  showPanel('panel-recipe-builder');
+}
+
+// Unlike showRecipeBuilderPanel(), preserves the name/servings-count/
+// ingredients already entered — used when returning from picking an
+// ingredient's quantity, mirroring returnToSearchPanel() vs
+// showSearchPanel().
+function resumeRecipeBuilderPanel() {
+  showPanel('panel-recipe-builder');
+  renderRecipeIngredientsList();
+  setFocus(document.getElementById('btn-recipe-add-ingredient'));
+}
+
+function renderRecipeIngredientsList() {
+  var ul = document.getElementById('recipe-ingredients-ul');
+  ul.innerHTML = '';
+  var list = state.recipeBuilder.ingredients;
+  document.getElementById('recipe-ingredients-empty').style.display = list.length ? 'none' : 'block';
+  list.forEach(function (ing, idx) {
+    var li = document.createElement('li');
+    li.className = 'food-row recipe-ingredient-row';
+    li.setAttribute('nav-selectable', 'true');
+
+    var name = document.createElement('span');
+    name.className = 'food-row-name';
+    name.textContent = ing.foodName;
+
+    var qty = document.createElement('span');
+    qty.className = 'food-row-serving';
+    qty.textContent = formatQty(ing.quantity) + ' ' + ing.servingName;
+
+    li.appendChild(name);
+    li.appendChild(qty);
+    li.addEventListener('click', function () { openIngredientActionsSheet(idx); });
+    ul.appendChild(li);
+  });
+}
+
+// A destructive action (removing an ingredient) always requires this
+// deliberate second step — a sheet tap, not a stray Enter on the row
+// itself — same "no single keystroke should delete something" principle
+// as the extra-serving-block Remove button in New Food, just achieved
+// differently since these rows have no per-row input fields to place a
+// button after.
+function openIngredientActionsSheet(idx) {
+  var ing = state.recipeBuilder.ingredients[idx];
+  openSheet(
+    [
+      {
+        label: 'Remove', danger: true, action: function () {
+          closeSheet();
+          state.recipeBuilder.ingredients.splice(idx, 1);
+          renderRecipeIngredientsList();
+        }
+      },
+      { label: 'Cancel', action: function () { closeSheet(); } }
+    ],
+    { title: ing.foodName, note: formatQty(ing.quantity) + ' ' + ing.servingName }
+  );
+}
+
+document.getElementById('btn-recipe-add-ingredient').addEventListener('click', showSearchPanelForRecipeIngredient);
+
+wireAdvanceOnEnter(document.getElementById('input-recipe-name'), recipeBuilderCenterAction);
+wireNumericField(document.getElementById('input-recipe-servings-count'));
+wireAdvanceOnEnter(document.getElementById('input-recipe-servings-count'), recipeBuilderCenterAction);
+document.getElementById('btn-recipe-submit').addEventListener('click', submitRecipe);
+
+function recipeBuilderCenterAction() {
+  var el = focused();
+  if (el && el.id === 'btn-recipe-submit') submitRecipe();
+  else if (el && !isTextInput(el)) interact(el); // "+ Add ingredient" button, or an ingredient row
+  else moveFocus('down');
+}
+
+function submitRecipe() {
+  var name = document.getElementById('input-recipe-name').value.trim();
+  var servingsCount = parseFloat(document.getElementById('input-recipe-servings-count').value);
+  var ingredients = state.recipeBuilder.ingredients;
+
+  if (!name) { showStatus('Recipe name is required', true); return; }
+  if (!ingredients.length) { showStatus('Add at least one ingredient', true); return; }
+  if (!servingsCount || servingsCount <= 0) { showStatus('Enter how many servings this makes', true); return; }
+
+  var totals = {};
+  var skipped = 0;
+  ingredients.forEach(function (ing) {
+    var food = state.foodsById[ing.foodId];
+    var serving = food && food.servings.filter(function (s) { return s.name === ing.servingName; })[0];
+    if (!serving) { skipped++; return; } // food/serving vanished since it was picked — degrade gracefully, don't block saving the rest
+    var scale = serving.quantity ? (ing.quantity / serving.quantity) : 0;
+    Object.keys(serving).forEach(function (key) {
+      if (key === 'name' || key === 'quantity') return;
+      totals[key] = (totals[key] || 0) + serving[key] * scale;
+    });
+  });
+
+  var bakedServing = { name: 'serving', quantity: 1 };
+  Object.keys(totals).forEach(function (key) { bakedServing[key] = round2(totals[key] / servingsCount); });
+
+  var id = generateGuid();
+  var recipe = {
+    id: id,
+    name: name,
+    type: 'recipe',
+    servings: [bakedServing],
+    ingredients: ingredients,
+    servingsCount: servingsCount,
+    source: 'local',
+    updated: nowSec(),
+    deleted: false
+  };
+
+  dbBulkPutFoods([recipe], function () {
+    state.allFoods.push(recipe);
+    state.foodsById[recipe.id] = recipe;
+    // Mirrors submitNewFood()'s immediate-add-to-diary behavior — a recipe
+    // never goes through submitNewFoodToApi/`/submit`, it only ever exists
+    // locally/synced to this account, never submitted for catalog review.
+    addFoodToDiaryDefault(recipe, function () {
+      showDiaryPanel();
+      showStatus('Added ' + name + (skipped ? ' (some ingredients were unavailable and skipped)' : ''), false);
+      syncFoods();
+      syncAfterDiaryMutation();
+    });
+  });
+}
+
+// ─── Screen: My Recipes ──────────────────────────────────────────────────────
+
+function showMyRecipesPanel() {
+  renderMyRecipesList();
+  showPanel('panel-my-recipes');
+  setSoftkeys('Back', 'SELECT', '');
+}
+
+function renderMyRecipesList() {
+  var ul = document.getElementById('my-recipes-ul');
+  ul.innerHTML = '';
+  var recipes = state.allFoods
+    .filter(function (f) { return f.type === 'recipe' && f.deleted !== true; })
+    .sort(function (a, b) { return a.name.localeCompare(b.name); });
+  document.getElementById('my-recipes-empty').style.display = recipes.length ? 'none' : 'block';
+  recipes.forEach(function (recipe) {
+    var li = document.createElement('li');
+    li.className = 'options-row my-recipe-row';
+    li.setAttribute('nav-selectable', 'true');
+
+    var name = document.createElement('span');
+    name.className = 'options-label';
+    name.textContent = recipe.name;
+
+    var meta = document.createElement('span');
+    meta.className = 'options-value';
+    var count = (recipe.ingredients || []).length;
+    meta.textContent = count + (count === 1 ? ' ingredient' : ' ingredients');
+
+    li.appendChild(name);
+    li.appendChild(meta);
+    li.addEventListener('click', function () { openMyRecipeActionsSheet(recipe.id); });
+    ul.appendChild(li);
+  });
+}
+
+function openMyRecipeActionsSheet(recipeId) {
+  var recipe = state.foodsById[recipeId];
+  openSheet(
+    [
+      { label: 'Delete', danger: true, action: function () { closeSheet(); deleteRecipe(recipeId); } },
+      { label: 'Cancel', action: function () { closeSheet(); } }
+    ],
+    { title: recipe ? recipe.name : 'Recipe', note: 'What would you like to do with this recipe?' }
+  );
+}
+
+function refreshOptionsMyRecipesCount() {
+  var count = state.allFoods.filter(function (f) { return f.type === 'recipe' && f.deleted !== true; }).length;
+  document.getElementById('opt-my-recipes-count').textContent = count ? String(count) : '';
+}
+
+document.getElementById('opt-my-recipes').addEventListener('click', showMyRecipesPanel);
+
+// Mirrors deleteMyFood()'s tombstone-vs-hard-delete logic exactly, minus the
+// mySubmissions bookkeeping step — a recipe never has one. Only correctly
+// reaches another device once logged in because buildFoodsSyncPayload()
+// explicitly includes local recipes (see its comment) — without that, a
+// tombstoned recipe would never be picked up by /sync/foods at all.
+function deleteRecipe(recipeId) {
+  function afterUiUpdate() {
+    renderMyRecipesList();
+    refreshOptionsMyRecipesCount();
+    showStatus('Deleted', false);
+    syncFoods();
+  }
+  if (getEverLoggedIn()) {
+    dbSoftDeleteFood(recipeId, function () {
+      if (state.foodsById[recipeId]) state.foodsById[recipeId].deleted = true;
+      afterUiUpdate();
+    });
+  } else {
+    delete state.foodsById[recipeId];
+    state.allFoods = state.allFoods.filter(function (f) { return f.id !== recipeId; });
+    var tx = db.transaction('foods', 'readwrite');
+    tx.objectStore('foods').delete(recipeId);
+    tx.oncomplete = afterUiUpdate;
+    tx.onerror = afterUiUpdate;
+  }
+}
+
 // ─── Screen: Options ──────────────────────────────────────────────────────────
 
 function refreshOptionsAccountRow() {
@@ -2164,6 +2687,7 @@ function showOptionsPanel() {
   document.getElementById('opt-version').textContent = APP_VERSION;
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
   refreshOptionsAccountRow();
+  refreshOptionsMyRecipesCount();
 
   var err = getLastSyncError();
   var errRow = document.getElementById('opt-sync-error-row');
@@ -2328,7 +2852,10 @@ function renderMyFoodsList(callback) {
         // A deleted (tombstoned) or altogether-missing food's mySubmissions
         // row deliberately survives a delete so /sync/foods can still
         // report it (see deleteMyFood) — it just never renders here.
-        if (!food || food.deleted === true) {
+        // Recipes should never have a mySubmissions row at all (see
+        // reconcileMySubmissionsFromFoodsSync), but this guard skips one
+        // defensively in case stray data exists.
+        if (!food || food.deleted === true || food.type === 'recipe') {
           rows[idx] = null;
         } else {
           var status = computeMyFoodStatus(sub, food);

@@ -20,7 +20,7 @@ test('with no usage history, matching foods fall back to alphabetical order', as
   await page.fill('#input-search', 'butter');
   await page.waitForTimeout(250);
 
-  var names = await page.locator('#panel-search .search-row:not(.add-new)').allTextContents();
+  var names = await page.locator('#panel-search .search-row:not(.add-new):not(.add-new-recipe):not(.add-new-guesstimate)').allTextContents();
   expect(names).toEqual(['Butter', 'Butter, Organic', 'Whipped Butter']);
 });
 
@@ -33,7 +33,7 @@ test('a frequently-logged food ranks above alphabetically-earlier matches, per t
   await page.fill('#input-search', 'butter');
   await page.waitForTimeout(250);
 
-  var names = await page.locator('#panel-search .search-row:not(.add-new)').allTextContents();
+  var names = await page.locator('#panel-search .search-row:not(.add-new):not(.add-new-recipe):not(.add-new-guesstimate)').allTextContents();
   expect(names).toEqual(['Whipped Butter', 'Butter', 'Butter, Organic']);
 });
 
@@ -50,6 +50,6 @@ test('deleting a logged entry decrements its usage count back down', async ({ pa
   await page.fill('#input-search', 'butter');
   await page.waitForTimeout(250);
 
-  var names = await page.locator('#panel-search .search-row:not(.add-new)').allTextContents();
+  var names = await page.locator('#panel-search .search-row:not(.add-new):not(.add-new-recipe):not(.add-new-guesstimate)').allTextContents();
   expect(names).toEqual(['Butter', 'Butter, Organic', 'Whipped Butter']); // back to alphabetical
 });
