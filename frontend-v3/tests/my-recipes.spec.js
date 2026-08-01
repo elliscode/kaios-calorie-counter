@@ -89,6 +89,82 @@ test('deleting a recipe removes it from the list and reports it deleted on the n
   expect(lastBody.foods[id].type).toBe('recipe');
 });
 
+test('Edit opens the same builder pre-filled, updates the recipe in place, and never logs a second diary entry', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await createSimpleRecipe(page, 'Original Name');
+  await expect(page.locator('#panel-diary .food-row')).toHaveCount(1); // the one entry from creation
+
+  var id = await page.evaluate(function () {
+    return new Promise(function (resolve) {
+      window.dbGetAllFoods(function (foods) {
+        var recipe = foods.filter(function (f) { return f.type === 'recipe'; })[0];
+        resolve(recipe && recipe.id);
+      });
+    });
+  });
+
+  await goToMyRecipes(page);
+  await page.locator('.my-recipe-row').click();
+  await expect(page.locator('#sheet')).toHaveAttribute('active', 'true');
+  await page.locator('#sheet-ul .list-row').filter({ hasText: 'Edit' }).click();
+
+  await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+  await expect(page.locator('#recipe-builder-title')).toHaveText('Edit Recipe');
+  await expect(page.locator('#input-recipe-name')).toHaveValue('Original Name');
+  await expect(page.locator('#input-recipe-servings-count')).toHaveValue('1');
+  await expect(page.locator('.recipe-ingredient-row')).toHaveCount(1);
+
+  // Modify: rename, add a second ingredient, change the servings count.
+  await page.fill('#input-recipe-name', 'Renamed Recipe');
+  await page.locator('#btn-recipe-add-ingredient').click();
+  await page.fill('#input-search', 'butter');
+  await page.waitForTimeout(250);
+  await page.locator('#panel-search .search-row', { hasText: 'Butter' }).first().click();
+  await page.selectOption('#input-serving-name', 'Tablespoon');
+  await page.fill('#input-serving-qty', '1');
+  await page.locator('#sk-center').click();
+  await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.recipe-ingredient-row')).toHaveCount(2);
+  await page.fill('#input-recipe-servings-count', '2');
+
+  await page.locator('#btn-recipe-submit').click();
+
+  // Returns to My Recipes, not the Diary — editing never logs a new entry.
+  await expect(page.locator('#panel-my-recipes')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.my-recipe-row .options-label')).toHaveText('Renamed Recipe');
+  await expect(page.locator('.my-recipe-row .options-value')).toHaveText('2 ingredients');
+
+  // The underlying record actually changed, and it's still the same id.
+  var recipe = await page.evaluate(function (recipeId) {
+    return new Promise(function (resolve) { window.dbGetFood(recipeId, resolve); });
+  }, id);
+  expect(recipe.id).toBe(id);
+  expect(recipe.name).toBe('Renamed Recipe');
+  expect(recipe.ingredients.length).toBe(2);
+  expect(recipe.servingsCount).toBe(2);
+
+  // No second diary entry was logged by the edit.
+  var todayEntries = await page.evaluate(function () {
+    return new Promise(function (resolve) { window.dbGetDiaryByDate(window.todayStr(), resolve); });
+  });
+  expect(todayEntries.length).toBe(1);
+});
+
+test('Back while editing a recipe returns to My Recipes, not Search', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await createSimpleRecipe(page, 'Back Test Recipe');
+
+  await goToMyRecipes(page);
+  await page.locator('.my-recipe-row').click();
+  await page.locator('#sheet-ul .list-row').filter({ hasText: 'Edit' }).click();
+  await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+
+  await page.locator('#sk-left').click();
+  await expect(page.locator('#panel-my-recipes')).toHaveAttribute('active', 'true');
+});
+
 test('a recipe synced down from another device does not leak into My Foods', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');

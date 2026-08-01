@@ -1,5 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+const { pressSoftKey } = require('./helpers');
 
 async function mockManifestWithCounter(page) {
   var calls = { manifest: 0 };
@@ -70,6 +71,55 @@ test('an empty local DB (e.g. after Clear Local DB) always checks manifest.json,
   await page.goto('/');
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
   expect(calls.manifest).toBe(2);
+});
+
+test('"Check for new data" bypasses the throttle and reports "Already up to date" when nothing changed', async ({ page }) => {
+  var calls = await mockManifestWithCounter(page);
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  expect(calls.manifest).toBe(1);
+
+  await pressSoftKey(page, 'SoftRight'); // Diary -> Options
+  await expect(page.locator('#panel-options')).toHaveAttribute('active', 'true');
+  await page.locator('#opt-check-for-data').click();
+
+  await expect(page.locator('#panel-options')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.status-toast')).toHaveText('Already up to date');
+  expect(calls.manifest).toBe(2); // re-checked despite no throttle boundary having passed
+});
+
+test('"Check for new data" reports how many files were actually downloaded', async ({ page }) => {
+  await page.route('https://calories.elliscode.com/manifest.json', function (route) {
+    route.fulfill({ path: path.join(__dirname, 'fixtures/manifest.json') });
+  });
+  await page.route('https://calories.elliscode.com/sample-foods.json', function (route) {
+    route.fulfill({ path: path.join(__dirname, 'fixtures/sample-foods.json') });
+  });
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  // Expand the manifest with a second, not-yet-synced file for the forced check to find.
+  await page.unroute('https://calories.elliscode.com/manifest.json');
+  await page.route('https://calories.elliscode.com/manifest.json', function (route) {
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        files: [
+          { id: 'test-foods', url: '/sample-foods.json' },
+          { id: 'extra-foods', url: '/extra-foods.json' }
+        ]
+      })
+    });
+  });
+  await page.route('https://calories.elliscode.com/extra-foods.json', function (route) {
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) });
+  });
+
+  await pressSoftKey(page, 'SoftRight'); // Diary -> Options
+  await page.locator('#opt-check-for-data').click();
+
+  await expect(page.locator('#panel-options')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.status-toast')).toHaveText('Downloaded 1 new file');
 });
 
 test('mostRecentTuesday8am() computes the correct boundary for every day of the week', async ({ page }) => {

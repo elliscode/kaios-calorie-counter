@@ -16,7 +16,7 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.8';
+var APP_VERSION = '3.0.9';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
 var NON_NUTRIENT_KEYS = [
@@ -712,10 +712,14 @@ function shouldCheckManifest(hasAnySyncedFiles, now) {
 // onFileStart(index, total, fileEntry) fires once per file, before it starts downloading.
 // onFileProgress(fraction) fires repeatedly while the current file streams in (fraction is
 // null if the server didn't send a Content-Length to compute a fraction from).
-function syncData(onFileStart, onFileProgress, callback) {
+// callback(filesDownloaded) reports how many files were actually pulled down, so callers
+// like forceCheckManifest() can tell the user "up to date" apart from "downloaded N files".
+// `force` skips the once-a-week throttle — used by that manual "Check for new data" action;
+// the normal boot-time call leaves it undefined/false and stays throttled as always.
+function syncData(onFileStart, onFileProgress, callback, force) {
   dbGetSyncedFileIds(function (syncedIds) {
-    if (!shouldCheckManifest(syncedIds.length > 0, new Date())) {
-      callback();
+    if (!force && !shouldCheckManifest(syncedIds.length > 0, new Date())) {
+      callback(0);
       return;
     }
     xhrGetJson(DATA_HOST + '/manifest.json')
@@ -724,10 +728,10 @@ function syncData(onFileStart, onFileProgress, callback) {
         var toFetch = (manifest.files || []).filter(function (f) {
           return syncedIds.indexOf(f.id) === -1;
         });
-        if (!toFetch.length) { setLastSyncError(null); callback(); return; }
+        if (!toFetch.length) { setLastSyncError(null); callback(0); return; }
         fetchNext(0);
         function fetchNext(i) {
-          if (i >= toFetch.length) { setLastSyncError(null); callback(); return; }
+          if (i >= toFetch.length) { setLastSyncError(null); callback(toFetch.length); return; }
           var fileEntry = toFetch[i];
           onFileStart(i + 1, toFetch.length, fileEntry);
           xhrGetJson(DATA_HOST + fileEntry.url, onFileProgress)
@@ -756,7 +760,7 @@ function syncData(onFileStart, onFileProgress, callback) {
       })
       .catch(function (err) {
         setLastSyncError('manifest.json: ' + describeFetchError(err));
-        callback();
+        callback(0);
       }); // offline-first: fall back to whatever's already cached
   });
 }
@@ -1426,7 +1430,10 @@ function handleSoftLeft() {
   } else if (panel.id === 'panel-new-food') {
     returnToSearchPanel();
   } else if (panel.id === 'panel-recipe-builder') {
-    returnToSearchPanel();
+    // Editing an existing recipe was reached from My Recipes, not Search —
+    // Back should return there, not to a Search screen never actually visited.
+    if (state.recipeBuilder && state.recipeBuilder.editingId) showMyRecipesPanel();
+    else returnToSearchPanel();
   } else if (panel.id === 'panel-guesstimate') {
     returnToSearchPanel();
   } else if (panel.id === 'panel-options') {
@@ -2448,16 +2455,40 @@ function submitGuesstimate() {
 // later from the ingredient list.
 
 function showRecipeBuilderPanel(prefillName) {
-  state.recipeBuilder = { ingredients: [] };
+  // editingId: null means Submit creates a new recipe (and logs it to the
+  // diary); editing an existing one (see showRecipeBuilderPanelForEdit)
+  // sets it instead, which submitRecipe() checks to update in place.
+  state.recipeBuilder = { ingredients: [], editingId: null };
+  document.getElementById('recipe-builder-title').textContent = 'New Recipe';
   document.getElementById('input-recipe-name').value = prefillName || '';
   document.getElementById('input-recipe-servings-count').value = '1';
   renderRecipeIngredientsList();
   showPanel('panel-recipe-builder');
 }
 
+// Reached from My Recipes' "Edit" action — the exact same builder panel
+// creation uses, just pre-filled from the existing recipe's own snapshot
+// (ingredients already store foodId/foodName/servingName/quantity, so no
+// re-lookup is needed) and wired to update that recipe in place on Submit
+// rather than create a new one or log a diary entry.
+function showRecipeBuilderPanelForEdit(recipe) {
+  state.recipeBuilder = {
+    ingredients: (recipe.ingredients || []).map(function (ing) {
+      return { foodId: ing.foodId, foodName: ing.foodName, servingName: ing.servingName, quantity: ing.quantity };
+    }),
+    editingId: recipe.id
+  };
+  document.getElementById('recipe-builder-title').textContent = 'Edit Recipe';
+  document.getElementById('input-recipe-name').value = recipe.name;
+  document.getElementById('input-recipe-servings-count').value = formatQty(recipe.servingsCount || 1);
+  renderRecipeIngredientsList();
+  showPanel('panel-recipe-builder');
+}
+
 // Unlike showRecipeBuilderPanel(), preserves the name/servings-count/
-// ingredients already entered — used when returning from picking an
-// ingredient's quantity, mirroring returnToSearchPanel() vs
+// ingredients already entered (create or edit mode alike — editingId lives
+// in state.recipeBuilder, untouched here) — used when returning from
+// picking an ingredient's quantity, mirroring returnToSearchPanel() vs
 // showSearchPanel().
 function resumeRecipeBuilderPanel() {
   showPanel('panel-recipe-builder');
@@ -2552,7 +2583,8 @@ function submitRecipe() {
   var bakedServing = { name: 'serving', quantity: 1 };
   Object.keys(totals).forEach(function (key) { bakedServing[key] = round2(totals[key] / servingsCount); });
 
-  var id = generateGuid();
+  var editingId = state.recipeBuilder.editingId;
+  var id = editingId || generateGuid();
   var recipe = {
     id: id,
     name: name,
@@ -2566,17 +2598,24 @@ function submitRecipe() {
   };
 
   dbBulkPutFoods([recipe], function () {
-    state.allFoods.push(recipe);
-    state.foodsById[recipe.id] = recipe;
-    // Mirrors submitNewFood()'s immediate-add-to-diary behavior — a recipe
-    // never goes through submitNewFoodToApi/`/submit`, it only ever exists
-    // locally/synced to this account, never submitted for catalog review.
-    addFoodToDiaryDefault(recipe, function () {
-      showDiaryPanel();
-      showStatus('Added ' + name + (skipped ? ' (some ingredients were unavailable and skipped)' : ''), false);
+    upsertStateFood(recipe);
+    if (editingId) {
+      // Editing only updates the recipe's own definition — it never logs a
+      // diary entry (unlike creating one), so only a foods sync is needed.
+      showMyRecipesPanel();
+      showStatus('Saved' + (skipped ? ' (some ingredients were unavailable and skipped)' : ''), false);
       syncFoods();
-      syncAfterDiaryMutation();
-    });
+    } else {
+      // Mirrors submitNewFood()'s immediate-add-to-diary behavior — a recipe
+      // never goes through submitNewFoodToApi/`/submit`, it only ever exists
+      // locally/synced to this account, never submitted for catalog review.
+      addFoodToDiaryDefault(recipe, function () {
+        showDiaryPanel();
+        showStatus('Added ' + name + (skipped ? ' (some ingredients were unavailable and skipped)' : ''), false);
+        syncFoods();
+        syncAfterDiaryMutation();
+      });
+    }
   });
 }
 
@@ -2620,11 +2659,21 @@ function openMyRecipeActionsSheet(recipeId) {
   var recipe = state.foodsById[recipeId];
   openSheet(
     [
+      { label: 'Edit', action: function () { closeSheet(); editRecipe(recipeId); } },
       { label: 'Delete', danger: true, action: function () { closeSheet(); deleteRecipe(recipeId); } },
       { label: 'Cancel', action: function () { closeSheet(); } }
     ],
     { title: recipe ? recipe.name : 'Recipe', note: 'What would you like to do with this recipe?' }
   );
+}
+
+// Opens the same Recipe Builder panel used for creation, pre-filled from
+// this recipe's own snapshot — Submit there updates it in place (see
+// submitRecipe()'s editingId branch) rather than creating a new one.
+function editRecipe(recipeId) {
+  var recipe = state.foodsById[recipeId];
+  if (!recipe) { showStatus('Recipe data unavailable', true); return; }
+  showRecipeBuilderPanelForEdit(recipe);
 }
 
 function refreshOptionsMyRecipesCount() {
@@ -2705,6 +2754,48 @@ function showOptionsPanel() {
 }
 
 document.getElementById('opt-clear-db').addEventListener('click', confirmClearLocalDb);
+
+// Bypasses the normal once-a-week throttle (see shouldCheckManifest) at the
+// user's own request — reuses the same loading-screen UI the boot-time
+// sync already shows, then returns to Options with a status toast instead
+// of proceeding to the Diary panel the way the boot sync does.
+function forceCheckManifest() {
+  showPanel('panel-loading');
+  document.getElementById('loading-count').textContent = 'Checking for updates…';
+  document.getElementById('loading-filename').textContent = '';
+  document.getElementById('loading-progress-fill').style.width = '0%';
+
+  syncData(
+    function onFileStart(index, total, fileEntry) {
+      var filename = fileEntry.url.replace(/^\//, '');
+      document.getElementById('loading-count').textContent = 'Loading ' + index + ' of ' + total + ' database files…';
+      document.getElementById('loading-filename').textContent = filename;
+      document.getElementById('loading-progress-fill').style.width = '0%';
+    },
+    function onFileProgress(fraction) {
+      var pct = fraction === null ? 100 : Math.round(fraction * 100);
+      document.getElementById('loading-progress-fill').style.width = pct + '%';
+    },
+    function onDone(filesDownloaded) {
+      dbGetAllFoods(function (foods) {
+        state.allFoods = foods;
+        state.foodsById = {};
+        foods.forEach(function (f) { state.foodsById[f.id] = f; });
+        showOptionsPanel();
+        if (getLastSyncError()) {
+          showStatus('Check failed — see Last Sync Error below', true);
+        } else if (filesDownloaded) {
+          showStatus('Downloaded ' + filesDownloaded + ' new file' + (filesDownloaded === 1 ? '' : 's'), false);
+        } else {
+          showStatus('Already up to date', false);
+        }
+      });
+    },
+    true
+  );
+}
+
+document.getElementById('opt-check-for-data').addEventListener('click', forceCheckManifest);
 
 document.getElementById('opt-login').addEventListener('click', function () {
   if (isLoggedIn()) {

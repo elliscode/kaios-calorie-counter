@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.8">
-  <link rel="stylesheet" href="css/header.css?v=3.0.8">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.8">
-  <link rel="stylesheet" href="css/input.css?v=3.0.8">
-  <link rel="stylesheet" href="css/list.css?v=3.0.8">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.8">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.8">
+  <link rel="stylesheet" href="css/root.css?v=3.0.9">
+  <link rel="stylesheet" href="css/header.css?v=3.0.9">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.9">
+  <link rel="stylesheet" href="css/input.css?v=3.0.9">
+  <link rel="stylesheet" href="css/list.css?v=3.0.9">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.9">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.9">
 </head>
 <body>
   <div id="root">
@@ -207,7 +207,7 @@
     <!-- Panel: Recipe Builder -->
     <div id="panel-recipe-builder" class="panel" active="false">
       <div class="header">
-        <h1>New Recipe</h1>
+        <h1 id="recipe-builder-title">New Recipe</h1>
         <span class="auth-status-text"></span>
         <span class="auth-dot" aria-hidden="true"></span>
       </div>
@@ -263,6 +263,9 @@
           <li class="options-row" nav-selectable="true">
             <span class="options-label">Version</span>
             <span class="options-value" id="opt-version"></span>
+          </li>
+          <li class="options-row" id="opt-check-for-data" nav-selectable="true">
+            <span class="options-label">Check for new data</span>
           </li>
           <li class="options-row" id="opt-login" nav-selectable="true">
             <span class="options-label" id="opt-login-label">Log In to sync across devices</span>
@@ -378,6 +381,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=3.0.8"></script>
+  <script src="app.js?v=3.0.9"></script>
 </body>
 </html>
