@@ -2,6 +2,7 @@ import os
 import re
 import json
 import uuid
+from datetime import date
 
 # Same namespace as convert_for_kaios_local.py: ids are a deterministic
 # function of the cleaned food name, so a Foundation food that happens to
@@ -71,17 +72,6 @@ macros = {
     'Protein': 'protein',
     'Energy': 'calories',
     'Alcohol, ethyl': 'alcohol',
-    'Fatty acids, total saturated': 'saturatedFat',
-    'not-present-1': 'transFat',
-    'Cholesterol': 'cholesterol',
-    'Sodium, Na': 'sodium',
-    'Fiber, total dietary': 'fiber',
-    'Total Sugars': 'sugars',
-    'Vitamin D (D2 + D3)': 'vitaminD',
-    'Calcium, Ca': 'calcium',
-    'Iron, Fe': 'iron',
-    'Potassium, K': 'potassium',
-    'not-present-2': 'addedSugar',
     'Caffeine': 'caffeine',
 }
 # Foundation foods don't consistently use the same nutrient names as Survey
@@ -91,7 +81,6 @@ macros = {
 macros_fallback = {
     'Energy (Atwater Specific Factors)': 'calories',
     'Energy (Atwater General Factors)': 'calories',
-    'Sugars, Total': 'sugars',
 }
 
 apostrophe_s = re.compile(r"'S")
@@ -255,11 +244,12 @@ with open("../data/FoodData_Central_foundation_food_json_2026-04-30.json", 'r') 
         food_id = str(uuid.uuid5(FOOD_NAMESPACE, formatted_name))
         foods.append({'id': food_id, 'name': formatted_name, 'servings': servings})
 
-with open("output_kaios_foundation_local.json", "w") as output_file:
+output_path = f"../../s3/{date.today().strftime('%Y_%m_%d')}_foundation_foods.json"
+with open(output_path, "w") as output_file:
     output_file.write("[\n")
     for i, food in enumerate(foods):
         comma = "," if i < len(foods) - 1 else ""
         output_file.write(json.dumps(food, separators=(',', ':')) + comma + "\n")
     output_file.write("]\n")
 
-print(f"Wrote {len(foods)} foods to output_kaios_foundation_local.json")
+print(f"Wrote {len(foods)} foods to {output_path}")

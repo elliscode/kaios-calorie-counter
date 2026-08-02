@@ -2,6 +2,7 @@ import os
 import re
 import json
 import uuid
+from datetime import date
 
 import json_stream
 from json_stream_to_standard_types import to_standard_types
@@ -124,17 +125,6 @@ macros = {
     'Protein': 'protein',
     'Energy': 'calories',
     'Alcohol, ethyl': 'alcohol',
-    'Fatty acids, total saturated': 'saturatedFat',
-    'not-present-1': 'transFat',
-    'Cholesterol': 'cholesterol',
-    'Sodium, Na': 'sodium',
-    'Fiber, total dietary': 'fiber',
-    'Total Sugars': 'sugars',
-    'Vitamin D (D2 + D3)': 'vitaminD',
-    'Calcium, Ca': 'calcium',
-    'Iron, Fe': 'iron',
-    'Potassium, K': 'potassium',
-    'not-present-2': 'addedSugar',
     'Caffeine': 'caffeine',
 }
 
@@ -289,11 +279,12 @@ with open("../data/surveyDownload.json", 'r') as file:
         food_id = str(uuid.uuid5(FOOD_NAMESPACE, formatted_name))
         foods.append({'id': food_id, 'name': formatted_name, 'servings': servings})
 
-with open("output_kaios_local.json", "w") as output_file:
+output_path = f"../../s3/{date.today().strftime('%Y_%m_%d')}_survey_foods.json"
+with open(output_path, "w") as output_file:
     output_file.write("[\n")
     for i, food in enumerate(foods):
         comma = "," if i < len(foods) - 1 else ""
         output_file.write(json.dumps(food, separators=(',', ':')) + comma + "\n")
     output_file.write("]\n")
 
-print(f"Wrote {len(foods)} foods to output_kaios_local.json")
+print(f"Wrote {len(foods)} foods to {output_path}")
