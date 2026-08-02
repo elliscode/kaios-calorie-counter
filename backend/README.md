@@ -1,17 +1,33 @@
 # KaiOS Calorie Counter Backend
 
-There's two files that were used to initially seed the food database:
+There's a few files that were used to initially seed the different food databases:
 
 - from here https://fdc.nal.usda.gov/download-datasets
-    - FNDDS 2021-2023 (JSON)
-    - Branded December 2025 (JSON)
-- look at the field names described in here https://fdc.nal.usda.gov/docs/Download_Field_Descriptions_Oct2020.pdf
 
-## Prepare the data for the database
+## backend/data-prep/convert_for_kaios_barcode_dynamodb.py
 
-```
-uv sync
-```
+- Formats the "Branded December 2025"
+- Data gets put in the Dynamo DB Barcode Lookup DB
+
+## backend/data-prep/convert_foundation_foods_for_kaios_local.py
+
+- Foundation Foods (only like 365 foods)
+- Data gets put in the local KaiOS Database
+- Data is manually renamed to remove the strange comma formatting (e.g. `Rice, white, long grain, unenriched, raw` --> `White Rice`)
+
+## backend/data-prep/convert_survey_foods_for_kaios_local.py
+
+- FNDDS (around 5k but MANY manually removed)
+- Data gets put in the local KaiOS Database
+- Data is manually renamed to remove the strange comma formatting (e.g. `Rice, White, Cooked, Glutinous` --> `Cooked White Rice`)
+
+## Add food in the Local Database
+
+I did do this but didnt write about it yet
+
+## Add food in the Dynamo DB
+
+TBD
 
 ## Lambda API
 

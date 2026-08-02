@@ -122,17 +122,7 @@ macros = {
     'Protein': 'protein',
     'Energy': 'calories',
     'Alcohol, ethyl': 'alcohol',
-    'Fatty acids, total saturated': 'saturatedFat',
-    'not-present-1': 'transFat',
-    'Cholesterol': 'cholesterol',
-    'Sodium, Na': 'sodium',
-    'Fiber, total dietary': 'fiber',
-    'Total Sugars': 'sugars',
-    'Vitamin D (D2 + D3)': 'vitaminD',
-    'Calcium, Ca': 'calcium',
-    'Iron, Fe': 'iron',
-    'Potassium, K': 'potassium',
-    'not-present-2': 'addedSugar',
+    'Caffeine': 'caffeine',
 }
 
 apostrophe_s = re.compile(r"'S")
@@ -279,54 +269,6 @@ count = 0
 dynamo_search_maps = {}
 
 with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.tsv", "w") as upc_file:
-    with open("../data/surveyDownload.json", 'r') as file:
-        raw_data = json_stream.load(file)
-        for item_stream in raw_data["SurveyFoods"]:
-            item = to_standard_types(item_stream)
-            formatted_name = name_cleaner(item['description'])
-            if formatted_name in stupid_foods:
-                continue
-            serving_100g = {'name': 'g', 'quantity': 100.0}
-            for nutrient in item['foodNutrients']:
-                if nutrient['nutrient']['name'] in macros.keys():
-                    serving_100g[macros[nutrient['nutrient']['name']]] = nutrient['amount']
-            servings = []
-            for portion in item['foodPortions']:
-                portion_name = portion['portionDescription']
-                quantity = 1
-                quantity, portion_name = parse_portion(quantity, portion_name)
-                portion_name = portion_name_post_process(portion_name)
-                if quantity is None or portion_name is None:
-                    sss = portion['portionDescription']
-                    if sss not in skip_file_servings:
-                        skip_file_servings.add(sss)
-                        with open('skip_file.txt', 'a') as f:
-                            f.write(f"{sss}\n")
-                    continue
-                portion_grams = portion['gramWeight']
-                ratio = portion_grams / 100.0
-                serving = { 'name': portion_name, 'quantity': quantity }
-                for key in serving_100g.keys():
-                    if key in serving:
-                        continue
-                    serving[key] = round(serving_100g[key] * ratio, 2)
-                servings.append(serving)
-            servings.append(serving_100g)
-
-            for serving in servings:
-                unique_servings.add(serving['name'])
-
-            json_line = json.dumps({'name': formatted_name, 'servings': servings})
-            output_file.write(json_line + "\n")
-            upc_file.write(f"{upc_cleaner(count, count)}\t{formatted_name}\n")
-            search_strings = get_search_strings(formatted_name)
-            for ss in search_strings:
-                if ss not in dynamo_search_maps:
-                    dynamo_search_maps[ss] = []
-            count = count + 1
-            if count > 10000:
-                count = 0
-                write_servings(unique_servings)
     with open("../data/FoodData_Central_branded_food_json_2025-12-18.json", 'r') as file:
         raw_data = json_stream.load(file)
         for item_stream in raw_data["BrandedFoods"]:
