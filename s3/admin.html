@@ -45,9 +45,55 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 16px;
+    gap: 8px;
   }
+  .topbar-actions { display: flex; gap: 8px; }
   #export-btn { background: #1a8a4a; }
   #export-btn:hover { background: #22a75c; }
+
+  #scan-video-wrap { margin-bottom: 16px; }
+  #scan-video {
+    width: 100%;
+    max-width: 360px;
+    display: block;
+    border-radius: 8px;
+    background: #000;
+  }
+  #scan-cancel-btn { background: #c0392b; }
+  #scan-cancel-btn:hover { background: #d9483a; }
+
+  #add-food-panel, #resolve-upc-panel { display: flex; flex-direction: column; gap: 10px; }
+  .field-hint { font-size: 12px; color: #666; margin: -4px 0 4px; }
+
+  .resolve-upc-reference {
+    font-size: 13px;
+    color: #444;
+    background: #f4faf6;
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .resolve-upc-results {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .resolve-upc-result-row {
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .resolve-upc-result-row:hover { background: #eaf3ea; }
+  .resolve-upc-no-results { color: #666; cursor: default; }
+  .resolve-upc-no-results:hover { background: none; }
+  .resolve-upc-selected-food {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 4px 0;
+  }
 
   .card {
     background: #fff;
@@ -219,17 +265,43 @@
   <div id="app" style="display:none;">
     <div class="topbar">
       <span id="pending-count"></span>
-      <button id="export-btn" onclick="exportToJson();">Export to JSON</button>
+      <div class="topbar-actions">
+        <button id="add-food-btn" onclick="openAddFoodPanel();">+ Add Food</button>
+        <button id="scan-btn" onclick="openScanPanel();">Scan Barcode</button>
+        <button id="export-btn" onclick="exportToJson();">Export to JSON</button>
+      </div>
     </div>
+
+    <div id="scan-video-wrap" style="display:none;">
+      <video id="scan-video" autoplay muted playsinline></video>
+      <button type="button" id="scan-cancel-btn" onclick="cancelScan();">Cancel Scan</button>
+    </div>
+
+    <div id="add-food-panel" class="card" style="display:none;"></div>
+    <div id="resolve-upc-panel" class="card" style="display:none;"></div>
+
     <div id="cards"></div>
     <p id="empty-state" style="display:none;">Nothing pending review.</p>
 
     <h2 id="approved-heading" style="display:none;">Approved, awaiting export</h2>
     <div id="approved-cards"></div>
+
+    <h2>UPC Mappings</h2>
+    <div class="topbar">
+      <span id="upc-mapping-pending-count"></span>
+      <button id="export-upc-mappings-btn" onclick="exportUpcMappingsToJson();">Export UPC Mappings</button>
+    </div>
+    <div id="upc-mapping-cards"></div>
+    <p id="upc-mapping-empty-state" style="display:none;">No pending UPC mappings.</p>
+
+    <h2 id="upc-mapping-approved-heading" style="display:none;">Approved, awaiting export</h2>
+    <div id="upc-mapping-approved-cards"></div>
   </div>
 
+<script src="js/vendor/zxing.min.js"></script>
 <script>
 const BASE_URL = 'https://api.calories.elliscode.com/admin';
+const LOOKUP_UPC_URL = 'https://api.calories.elliscode.com/lookup-upc';
 const CSRF_STORAGE_KEY = 'calorie-counter-admin-csrf-token';
 
 const generateCodeDiv = document.getElementById('generate-code');
@@ -243,6 +315,35 @@ const approvedCardsDiv = document.getElementById('approved-cards');
 const errorEl = document.getElementById('error');
 const phoneNumberInput = document.getElementById('phone-number');
 const oneTimeCodeInput = document.getElementById('one-time-code');
+const scanVideoWrap = document.getElementById('scan-video-wrap');
+const scanVideoEl = document.getElementById('scan-video');
+const addFoodPanel = document.getElementById('add-food-panel');
+const resolveUpcPanel = document.getElementById('resolve-upc-panel');
+const upcMappingCardsDiv = document.getElementById('upc-mapping-cards');
+const upcMappingEmptyStateEl = document.getElementById('upc-mapping-empty-state');
+const upcMappingPendingCountEl = document.getElementById('upc-mapping-pending-count');
+const upcMappingApprovedHeadingEl = document.getElementById('upc-mapping-approved-heading');
+const upcMappingApprovedCardsDiv = document.getElementById('upc-mapping-approved-cards');
+
+// Populated by loadPending() — the "map to an existing food" search in the
+// Resolve UPC panel matches against the shipped local catalog *and*
+// whatever's currently pending/approved this session, so scanning several
+// variants of a food you just added doesn't force duplicates either.
+let currentPendingFoods = [];
+let currentApprovedFoods = [];
+let localFoodCatalog = null;
+
+// Same format hints as s3/barcode-test.html — restricting to the barcode
+// symbologies actual grocery products use cuts down on false-positive
+// decodes from stray non-barcode shapes in frame.
+const zxingHints = new Map();
+zxingHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+  ZXing.BarcodeFormat.UPC_A,
+  ZXing.BarcodeFormat.UPC_E,
+  ZXing.BarcodeFormat.EAN_13,
+  ZXing.BarcodeFormat.EAN_8,
+]);
+const codeReader = new ZXing.BrowserMultiFormatReader(zxingHints);
 
 let csrfToken = undefined;
 
@@ -328,6 +429,8 @@ async function submitCode(event) {
 async function loadPending() {
   cardsDiv.innerHTML = '';
   approvedCardsDiv.innerHTML = '';
+  upcMappingCardsDiv.innerHTML = '';
+  upcMappingApprovedCardsDiv.innerHTML = '';
   try {
     const response = await fetch(`${BASE_URL}/pending`, {
       method: 'POST',
@@ -341,6 +444,8 @@ async function loadPending() {
     const data = await response.json();
     const pending = sortByExpiration(data.pending || []);
     const approved = sortByExpiration(data.approved || []);
+    currentPendingFoods = pending;
+    currentApprovedFoods = approved;
 
     pendingCountEl.innerText = pending.length + (pending.length === 1 ? ' item pending' : ' items pending');
     emptyStateEl.style.display = pending.length ? 'none' : 'block';
@@ -355,6 +460,13 @@ async function loadPending() {
     // passes (item, index, array), and that index would otherwise land in
     // the prepend parameter, silently reversing every item after the first.
     approved.forEach(function (entry) { buildReadOnlyCard(entry, false); });
+
+    const pendingUpcMappings = sortByExpiration(data.pendingUpcMappings || []);
+    const approvedUpcMappings = sortByExpiration(data.approvedUpcMappings || []);
+    pendingUpcMappings.forEach(buildUpcMappingCard);
+    updateUpcMappingPendingCount();
+    upcMappingApprovedHeadingEl.style.display = approvedUpcMappings.length ? 'block' : 'none';
+    approvedUpcMappings.forEach(function (entry) { buildUpcMappingReadOnlyCard(entry, false); });
   } catch {
     displayError('Error loading pending submissions, please refresh.');
   }
@@ -403,13 +515,14 @@ function makeServingBlock(container, index, serving) {
   makeField(wrap, 'fat', 'Fat (g)', serving.fat);
   makeField(wrap, 'carbohydrates', 'Carbs (g)', serving.carbohydrates);
   makeField(wrap, 'protein', 'Protein (g)', serving.protein);
-  // Caffeine has no input on the app's own "+ Add New Food" form on
-  // purpose (not worth trusting arbitrary user input for it) — this is the
-  // only place it's ever actually set, by an admin during review. Older
-  // submissions (from before this field existed) have no "caffeine" key at
-  // all, so `serving.caffeine` is `undefined` -- fall back to '' rather
-  // than let the <input> literally display the string "undefined".
+  // Caffeine/alcohol have no input on the app's own "+ Add New Food" form on
+  // purpose (not worth trusting arbitrary user input for these) — this is
+  // the only place either is ever actually set, by an admin during review.
+  // Older submissions (from before these fields existed) have no
+  // "caffeine"/"alcohol" key at all, so falling back to '' avoids the
+  // <input> literally displaying the string "undefined".
   makeField(wrap, 'caffeine', 'Caffeine (mg)', serving.caffeine == null ? '' : serving.caffeine);
+  makeField(wrap, 'alcohol', 'Alcohol (g)', serving.alcohol == null ? '' : serving.alcohol);
 
   container.appendChild(wrap);
   return wrap;
@@ -432,10 +545,12 @@ function collectServings(container) {
       protein: block.querySelector('[data-field="protein"]').value || 0
     };
     // Left blank on purpose -> omitted entirely rather than sent as 0, so a
-    // serving nobody has ever reviewed for caffeine doesn't get a
+    // serving nobody has ever reviewed for caffeine/alcohol doesn't get a
     // definitive-looking "0" written into it just because the field was empty.
     var caffeineValue = block.querySelector('[data-field="caffeine"]').value;
     if (caffeineValue) serving.caffeine = caffeineValue;
+    var alcoholValue = block.querySelector('[data-field="alcohol"]').value;
+    if (alcoholValue) serving.alcohol = alcoholValue;
     return serving;
   });
 }
@@ -517,7 +632,7 @@ function buildCard(entry) {
   addServingBtn.innerText = '+ Add Serving';
   addServingBtn.addEventListener('click', function () {
     makeServingBlock(servingsContainer, servingsContainer.children.length, {
-      name: '', quantity: '', calories: '', fat: '', carbohydrates: '', protein: '', caffeine: ''
+      name: '', quantity: '', calories: '', fat: '', carbohydrates: '', protein: '', caffeine: '', alcohol: ''
     });
   });
   fields.appendChild(addServingBtn);
@@ -599,7 +714,8 @@ function renderApprovedReadOnly(card, entry) {
     line.className = 'serving-readonly-line';
     line.innerText = `${serving.quantity} ${serving.name} — ${serving.calories} cal, ` +
       `${serving.fat}g fat, ${serving.carbohydrates}g carbs, ${serving.protein}g protein` +
-      (Number(serving.caffeine) ? `, ${serving.caffeine}mg caffeine` : '');
+      (Number(serving.caffeine) ? `, ${serving.caffeine}mg caffeine` : '') +
+      (Number(serving.alcohol) ? `, ${serving.alcohol}g alcohol` : '');
     servingsList.appendChild(line);
   });
   fields.appendChild(servingsList);
@@ -638,7 +754,7 @@ function renderApprovedEditable(card, entry) {
   addServingBtn.innerText = '+ Add Serving';
   addServingBtn.addEventListener('click', function () {
     makeServingBlock(servingsContainer, servingsContainer.children.length, {
-      name: '', quantity: '', calories: '', fat: '', carbohydrates: '', protein: '', caffeine: ''
+      name: '', quantity: '', calories: '', fat: '', carbohydrates: '', protein: '', caffeine: '', alcohol: ''
     });
   });
   fields.appendChild(addServingBtn);
@@ -769,6 +885,475 @@ async function exportToJson() {
   } catch {
     displayError('Error exporting, please try again.');
   }
+}
+
+// --- UPC Mappings (separate section — see backend/README.md's "UPC
+// mappings" note for why a UPC never lives on the food record itself) ------
+
+function updateUpcMappingPendingCount() {
+  const count = upcMappingCardsDiv.children.length;
+  upcMappingPendingCountEl.innerText = count + (count === 1 ? ' mapping pending' : ' mappings pending');
+  upcMappingEmptyStateEl.style.display = count ? 'none' : 'block';
+}
+
+function buildUpcMappingCard(entry) {
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  const fields = document.createElement('div');
+  fields.className = 'card-fields';
+  makeReadOnlyField(fields, 'UPC', entry.upc);
+  const foodIdInput = makeField(fields, 'foodId', 'Food ID', entry.foodId);
+  const foodNameInput = makeField(fields, 'foodName', 'Food Name', entry.foodName);
+  const servingNameInput = makeField(fields, 'servingName', 'Serving Name', entry.servingName);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.innerText = 'Accept';
+  acceptBtn.className = 'accept';
+  acceptBtn.addEventListener('click', function () {
+    const corrections = {
+      foodId: foodIdInput.value,
+      foodName: foodNameInput.value,
+      servingName: servingNameInput.value
+    };
+    reviewUpcMapping(entry.upc, true, card, corrections);
+  });
+  actions.appendChild(acceptBtn);
+
+  const rejectBtn = document.createElement('button');
+  rejectBtn.innerText = 'Reject';
+  rejectBtn.className = 'reject';
+  rejectBtn.addEventListener('click', function () {
+    reviewUpcMapping(entry.upc, false, card, null);
+  });
+  actions.appendChild(rejectBtn);
+
+  fields.appendChild(actions);
+  card.appendChild(fields);
+  upcMappingCardsDiv.appendChild(card);
+}
+
+function buildUpcMappingReadOnlyCard(entry, prepend) {
+  const card = document.createElement('div');
+  card.className = 'card readonly';
+  const fields = document.createElement('div');
+  fields.className = 'card-fields';
+  makeReadOnlyField(fields, 'UPC', entry.upc);
+  makeReadOnlyField(fields, 'Food ID', entry.foodId);
+  makeReadOnlyField(fields, 'Food Name', entry.foodName);
+  makeReadOnlyField(fields, 'Serving', entry.servingName);
+  card.appendChild(fields);
+  if (prepend) upcMappingApprovedCardsDiv.prepend(card);
+  else upcMappingApprovedCardsDiv.appendChild(card);
+}
+
+async function reviewUpcMapping(upc, approved, cardEl, corrections) {
+  const fieldValues = corrections || {};
+  try {
+    const response = await fetch(`${BASE_URL}/review-upc-mapping`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify(Object.assign({ csrf: csrfToken, upc: upc, approved: approved }, fieldValues))
+    });
+    if (response.status >= 200 && response.status < 300) {
+      cardEl.remove();
+      updateUpcMappingPendingCount();
+      // Same "move straight into the approved section, no re-fetch" pattern
+      // as reviewItem for foods.
+      if (approved) {
+        upcMappingApprovedHeadingEl.style.display = 'block';
+        buildUpcMappingReadOnlyCard(
+          { upc: upc, foodId: fieldValues.foodId, foodName: fieldValues.foodName, servingName: fieldValues.servingName },
+          true
+        );
+      }
+      return;
+    }
+  } catch {}
+  displayError(approved ? 'Error accepting mapping, please try again.' : 'Error rejecting mapping, please try again.');
+}
+
+async function exportUpcMappingsToJson() {
+  try {
+    const response = await fetch(`${BASE_URL}/export-upc-mappings`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ csrf: csrfToken })
+    });
+    if (response.status < 200 || response.status >= 300) {
+      displayError('Could not export UPC mappings.');
+      return;
+    }
+    const mappings = await response.json();
+    const blob = new Blob([JSON.stringify(mappings)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `upc-mappings-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    displayError('');
+  } catch {
+    displayError('Error exporting UPC mappings, please try again.');
+  }
+}
+
+// --- Add Food (manual entry, or a scan resolved as "new food"/"new serving
+// size on an existing food") ------------------------------------------------
+// All entry points converge on renderAddFoodPanel/saveNewFood, which POSTs
+// to /admin/add-food — the admin-console equivalent of the app's own
+// "+ Add New Food" submission, landing in the exact same pending queue.
+// scanContext is undefined for the plain "+ Add Food" button; when present
+// it carries whatever the Resolve UPC panel already knows (see below).
+
+function openAddFoodPanel(scanContext) {
+  displayError('');
+  closeResolveUpcPanel();
+  const ctx = scanContext || {};
+  const blankServing = { name: '', quantity: '', calories: '', fat: '', carbohydrates: '', protein: '', caffeine: '', alcohol: '' };
+  const lookupServings = ctx.lookupFood && ctx.lookupFood.servings && ctx.lookupFood.servings.length
+    ? ctx.lookupFood.servings
+    : null;
+  let hint = '';
+  if (ctx.foodId) {
+    hint = `Adding a new serving size to "${ctx.foodName}" — only enter the one new serving, not the food's others.`;
+  } else if (ctx.upc) {
+    hint = 'First serving below is what this UPC will be mapped to.';
+  }
+  renderAddFoodPanel({
+    name: ctx.foodName || (ctx.lookupFood && ctx.lookupFood.name) || '',
+    upc: ctx.upc || '',
+    foodId: ctx.foodId || null,
+    servings: lookupServings || [blankServing],
+    hint: hint
+  });
+}
+
+function closeAddFoodPanel() {
+  addFoodPanel.style.display = 'none';
+  addFoodPanel.innerHTML = '';
+}
+
+function renderAddFoodPanel(prefill) {
+  addFoodPanel.innerHTML = '';
+  addFoodPanel.style.display = 'flex';
+
+  const title = document.createElement('h2');
+  title.innerText = prefill.foodId ? 'Add New Serving' : 'Add Food';
+  addFoodPanel.appendChild(title);
+
+  if (prefill.hint) {
+    const hint = document.createElement('p');
+    hint.className = 'field-hint';
+    hint.innerText = prefill.hint;
+    addFoodPanel.appendChild(hint);
+  }
+
+  const fields = document.createElement('div');
+  fields.className = 'card-fields';
+  const nameInput = makeField(fields, 'name', 'Name', prefill.name);
+  const upcInput = makeField(fields, 'upc', 'UPC', prefill.upc);
+
+  const servingsContainer = document.createElement('div');
+  servingsContainer.className = 'servings-container';
+  prefill.servings.forEach(function (serving, i) {
+    makeServingBlock(servingsContainer, i, serving);
+  });
+  fields.appendChild(servingsContainer);
+
+  const addServingBtn = document.createElement('button');
+  addServingBtn.type = 'button';
+  addServingBtn.className = 'add-serving';
+  addServingBtn.innerText = '+ Add Serving';
+  addServingBtn.addEventListener('click', function () {
+    makeServingBlock(servingsContainer, servingsContainer.children.length, {
+      name: '', quantity: '', calories: '', fat: '', carbohydrates: '', protein: '', caffeine: '', alcohol: ''
+    });
+  });
+  fields.appendChild(addServingBtn);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.innerText = 'Save';
+  saveBtn.className = 'accept';
+  saveBtn.addEventListener('click', async function () {
+    const ok = await saveNewFood(nameInput.value, upcInput.value, collectServings(servingsContainer), prefill.foodId);
+    if (ok) closeAddFoodPanel();
+  });
+  actions.appendChild(saveBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'cancel-edit';
+  cancelBtn.innerText = 'Cancel';
+  cancelBtn.addEventListener('click', closeAddFoodPanel);
+  actions.appendChild(cancelBtn);
+
+  fields.appendChild(actions);
+  addFoodPanel.appendChild(fields);
+}
+
+async function saveNewFood(name, upc, servings, foodId) {
+  try {
+    const response = await fetch(`${BASE_URL}/add-food`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify(Object.assign(
+        { csrf: csrfToken, name: name, servings: servings },
+        upc ? { upc: upc } : {},
+        foodId ? { foodId: foodId } : {}
+      ))
+    });
+    if (response.status >= 200 && response.status < 300) {
+      displayError('');
+      loadPending();
+      return true;
+    }
+    const data = await response.json();
+    displayError(data.message);
+  } catch {
+    displayError('Error saving food, please try again.');
+  }
+  return false;
+}
+
+// --- Barcode scan -> Resolve UPC panel --------------------------------------
+// A UPC identifies a *product*, not a food (see backend/README.md's "UPC
+// mappings" note) — scanning never creates a food directly. It always opens
+// this panel, which offers three outcomes: map to a food + serving that
+// already exist (/admin/add-upc-mapping, no new nutrition data at all), map
+// to a food that exists but needs a new serving size (falls into the Add
+// Food panel above with foodId set), or declare it's a genuinely new food
+// (falls into the Add Food panel with no foodId — the mapping is then
+// created server-side, pointing at whatever serving ends up listed first).
+
+function cancelScan() {
+  codeReader.reset();
+  scanVideoWrap.style.display = 'none';
+}
+
+async function openScanPanel() {
+  displayError('');
+  closeAddFoodPanel();
+  closeResolveUpcPanel();
+  scanVideoWrap.style.display = 'block';
+
+  try {
+    await codeReader.decodeFromConstraints(
+      { audio: false, video: { facingMode: { ideal: 'environment' } } },
+      scanVideoEl,
+      function (result, err) {
+        if (result) {
+          const scannedCode = result.getText();
+          cancelScan();
+          startResolveUpc(scannedCode);
+        }
+        // NotFoundException just means no barcode was in this particular
+        // frame — expected on nearly every frame while aiming the camera,
+        // not a real error.
+        if (err && !(err instanceof ZXing.NotFoundException)) {
+          displayError('Scan error: ' + err.message);
+        }
+      }
+    );
+  } catch (err) {
+    cancelScan();
+    displayError('Could not access camera: ' + err.message);
+  }
+}
+
+// The shipped local catalog (~1500 foods) — fetched once from this same
+// origin and cached, not re-fetched on every scan.
+async function loadLocalFoodCatalog() {
+  if (localFoodCatalog) return localFoodCatalog;
+  try {
+    const response = await fetch('/2026-08-02-refined-collated-foods.json');
+    localFoodCatalog = await response.json();
+  } catch {
+    localFoodCatalog = [];
+  }
+  return localFoodCatalog;
+}
+
+// Local catalog union whatever's pending/approved this session — normalized
+// to the same {id, name, servings} shape (pending/approved entries key their
+// id as key2, not id).
+function searchableFoods() {
+  const sessionFoods = currentPendingFoods.concat(currentApprovedFoods).map(function (item) {
+    return { id: item.key2, name: item.name, servings: item.servings };
+  });
+  return (localFoodCatalog || []).concat(sessionFoods);
+}
+
+function closeResolveUpcPanel() {
+  resolveUpcPanel.style.display = 'none';
+  resolveUpcPanel.innerHTML = '';
+}
+
+// /lookup-upc (public, no admin session) is only ever used here as a prefill
+// aid — "what does this barcode's product record say nutritionally" — not
+// as the source of truth for what the UPC means in this app's own catalog.
+async function startResolveUpc(upc) {
+  displayError('');
+  let lookupFood = null;
+  try {
+    const response = await fetch(LOOKUP_UPC_URL, {
+      method: 'POST',
+      body: JSON.stringify({ upc: upc })
+    });
+    if (response.status === 200) lookupFood = await response.json();
+  } catch {
+    // Non-fatal — resolving still works with no reference data, just as a
+    // blank starting point for a manual entry.
+  }
+  await loadLocalFoodCatalog();
+  renderResolveUpcPanel(upc, lookupFood);
+}
+
+function renderResolveUpcPanel(upc, lookupFood) {
+  resolveUpcPanel.innerHTML = '';
+  resolveUpcPanel.style.display = 'flex';
+
+  const title = document.createElement('h2');
+  title.innerText = 'Resolve UPC: ' + upc;
+  resolveUpcPanel.appendChild(title);
+
+  if (lookupFood) {
+    const ref = document.createElement('div');
+    ref.className = 'resolve-upc-reference';
+    const summary = (lookupFood.servings || []).map(function (s) {
+      return s.quantity + ' ' + s.name + ' — ' + s.calories + ' cal';
+    }).join('; ');
+    ref.innerText = 'Product database: ' + lookupFood.name + (summary ? ' (' + summary + ')' : '');
+    resolveUpcPanel.appendChild(ref);
+  }
+
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'field';
+  const searchLabel = document.createElement('label');
+  searchLabel.innerText = 'Search existing foods';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'e.g. Diet Pepsi';
+  searchWrap.appendChild(searchLabel);
+  searchWrap.appendChild(searchInput);
+  resolveUpcPanel.appendChild(searchWrap);
+
+  const resultsList = document.createElement('div');
+  resultsList.className = 'resolve-upc-results';
+  resolveUpcPanel.appendChild(resultsList);
+
+  const detailWrap = document.createElement('div');
+  resolveUpcPanel.appendChild(detailWrap);
+
+  searchInput.addEventListener('input', function () {
+    renderFoodSearchResults(resultsList, detailWrap, searchInput.value, upc, lookupFood);
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const newFoodBtn = document.createElement('button');
+  newFoodBtn.type = 'button';
+  newFoodBtn.className = 'add-serving';
+  newFoodBtn.innerText = 'None of these — new food';
+  newFoodBtn.addEventListener('click', function () {
+    openAddFoodPanel({ upc: upc, lookupFood: lookupFood });
+  });
+  actions.appendChild(newFoodBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'cancel-edit';
+  cancelBtn.innerText = 'Cancel';
+  cancelBtn.addEventListener('click', closeResolveUpcPanel);
+  actions.appendChild(cancelBtn);
+
+  resolveUpcPanel.appendChild(actions);
+}
+
+function renderFoodSearchResults(resultsList, detailWrap, query, upc, lookupFood) {
+  resultsList.innerHTML = '';
+  detailWrap.innerHTML = '';
+  const q = query.trim().toLowerCase();
+  if (!q) return;
+
+  const matches = searchableFoods().filter(function (food) {
+    return food.name.toLowerCase().indexOf(q) !== -1;
+  }).slice(0, 20);
+
+  if (!matches.length) {
+    const none = document.createElement('div');
+    none.className = 'resolve-upc-result-row resolve-upc-no-results';
+    none.innerText = 'No matches';
+    resultsList.appendChild(none);
+    return;
+  }
+
+  matches.forEach(function (food) {
+    const row = document.createElement('div');
+    row.className = 'resolve-upc-result-row';
+    row.innerText = food.name;
+    row.addEventListener('click', function () {
+      renderFoodServingPicker(detailWrap, food, upc, lookupFood);
+    });
+    resultsList.appendChild(row);
+  });
+}
+
+function renderFoodServingPicker(detailWrap, food, upc, lookupFood) {
+  detailWrap.innerHTML = '';
+
+  const heading = document.createElement('div');
+  heading.className = 'resolve-upc-selected-food';
+  heading.innerText = 'Selected: ' + food.name;
+  detailWrap.appendChild(heading);
+
+  (food.servings || []).forEach(function (serving) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'accept';
+    btn.innerText = 'Map UPC to: ' + serving.quantity + ' ' + serving.name;
+    btn.addEventListener('click', async function () {
+      const ok = await saveUpcMapping(upc, food.id, food.name, serving.name);
+      if (ok) closeResolveUpcPanel();
+    });
+    detailWrap.appendChild(btn);
+  });
+
+  const newServingBtn = document.createElement('button');
+  newServingBtn.type = 'button';
+  newServingBtn.className = 'add-serving';
+  newServingBtn.innerText = '+ This is a new serving size';
+  newServingBtn.addEventListener('click', function () {
+    openAddFoodPanel({ upc: upc, foodId: food.id, foodName: food.name, lookupFood: lookupFood });
+  });
+  detailWrap.appendChild(newServingBtn);
+}
+
+async function saveUpcMapping(upc, foodId, foodName, servingName) {
+  try {
+    const response = await fetch(`${BASE_URL}/add-upc-mapping`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ csrf: csrfToken, upc: upc, foodId: foodId, foodName: foodName, servingName: servingName })
+    });
+    if (response.status >= 200 && response.status < 300) {
+      displayError('');
+      loadPending();
+      return true;
+    }
+    const data = await response.json();
+    displayError(data.message);
+  } catch {
+    displayError('Error saving UPC mapping, please try again.');
+  }
+  return false;
 }
 
 loadCsrfToken();

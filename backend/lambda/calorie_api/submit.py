@@ -11,6 +11,7 @@ from .utils import (
     load_encrypted_collection,
     store_encrypted_collection,
     decimal_to_number,
+    create_upc_mapping,
 )
 
 SUBMISSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -29,6 +30,12 @@ def submit_food_route(event, user_id, body):
     # calorie_api/presigned.py) used this exact key, f"{id}.{extension}".
     # This route never touches S3 or the photo bytes at all.
     photo_key = body.get("photoKey") or None
+    # Not part of the app's UI yet — once barcode scanning lands there, a
+    # scan-then-submit will pass the scanned code through here invisibly to
+    # the user. A UPC never lives on the food item itself (see
+    # create_upc_mapping) — it only ever produces a separate, admin-reviewed
+    # mapping to this submission's own id + its first serving.
+    upc = (body.get("upc") or "").strip() or None
 
     if not GUID_REGEX.match(food_id):
         return format_response(event=event, http_code=400, body="A valid id is required")
@@ -56,6 +63,9 @@ def submit_food_route(event, user_id, body):
             }
         ),
     )
+
+    if upc:
+        create_upc_mapping(upc=upc, food_id=food_id, food_name=name, serving_name=servings[0]["name"])
 
     # Dual-purpose: this same food also lands in the submitter's own synced
     # foods collection, immediately usable from their account on any device —

@@ -204,10 +204,11 @@ def parse_serving(raw):
     carbohydrates = parse_decimal(raw.get("carbohydrates")) or Decimal(0)
     protein = parse_decimal(raw.get("protein")) or Decimal(0)
     # Only ever set by an admin during review, not by the submitting user —
-    # the "+ Add New Food" form has no caffeine field at all, deliberately
-    # (not worth trusting arbitrary user input for this one), so this is
-    # always 0 on a fresh submission until an admin fills it in.
+    # the "+ Add New Food" form has no caffeine/alcohol fields at all,
+    # deliberately (not worth trusting arbitrary user input for these), so
+    # both are always 0 on a fresh submission until an admin fills them in.
     caffeine = parse_decimal(raw.get("caffeine")) or Decimal(0)
+    alcohol = parse_decimal(raw.get("alcohol")) or Decimal(0)
     if not name or quantity is None or quantity <= 0 or calories is None:
         return None
     return {
@@ -218,6 +219,7 @@ def parse_serving(raw):
         "carbohydrates": carbohydrates,
         "protein": protein,
         "caffeine": caffeine,
+        "alcohol": alcohol,
     }
 
 
@@ -289,6 +291,36 @@ def store_encrypted_collection(key1, key2, data):
     dynamo.put_item(
         TableName=TABLE_NAME,
         Item=python_obj_to_dynamo_obj({"key1": key1, "key2": key2, "data": encrypt_field(data)}),
+    )
+
+
+# A UPC identifies a *product*, not a food — many products (different sizes,
+# formats, regional packaging) legitimately share the same food, differing
+# only in which serving they represent. This is the join record for that:
+# (upc) -> (foodId, servingName), kept entirely separate from both the food
+# itself and the remote UPC->product lookup table. Created as a side effect
+# of submit.py's submit_food_route and admin.py's add_food_route whenever a
+# upc is present, always pointing at the submission's first serving — see
+# calorie_api/admin.py for the pending/review/export routes that manage
+# these once created.
+UPC_MAPPING_TTL_SECONDS = 30 * 24 * 60 * 60  # same as submitted_food's own TTL
+
+
+def create_upc_mapping(upc, food_id, food_name, serving_name):
+    dynamo.put_item(
+        TableName=TABLE_NAME,
+        Item=python_obj_to_dynamo_obj(
+            {
+                "key1": "upc_mapping",
+                "key2": upc,
+                "upc": upc,
+                "foodId": food_id,
+                "foodName": food_name,  # denormalized for admin display — not part of the final export
+                "servingName": serving_name,
+                "submittedAt": int(time.time()),
+                "expiration": int(time.time()) + UPC_MAPPING_TTL_SECONDS,
+            }
+        ),
     )
 
 

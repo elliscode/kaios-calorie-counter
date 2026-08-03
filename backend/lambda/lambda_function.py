@@ -13,7 +13,15 @@ from calorie_api.utils import (
 )
 from calorie_api.submit import submit_food_route
 from calorie_api.presigned import presigned_post_route, presigned_get_route
-from calorie_api.admin import get_pending_route, review_route, export_route
+from calorie_api.admin import (
+    get_pending_route,
+    review_route,
+    export_route,
+    add_food_route,
+    add_upc_mapping_route,
+    review_upc_mapping_route,
+    export_upc_mappings_route,
+)
 from calorie_api.account import (
     account_otp_route,
     account_login_route,
@@ -22,6 +30,7 @@ from calorie_api.account import (
     account_refresh_route,
 )
 from calorie_api.sync import sync_foods_route, sync_diary_route, sync_preferences_route
+from calorie_api.upc import lookup_upc_route
 
 
 def lambda_handler(event, context):
@@ -78,6 +87,14 @@ def route(event):
         return review_route(event)
     if path_equals(event=event, method="POST", path="/admin/export"):
         return export_route(event)
+    if path_equals(event=event, method="POST", path="/admin/add-food"):
+        return add_food_route(event)
+    if path_equals(event=event, method="POST", path="/admin/add-upc-mapping"):
+        return add_upc_mapping_route(event)
+    if path_equals(event=event, method="POST", path="/admin/review-upc-mapping"):
+        return review_upc_mapping_route(event)
+    if path_equals(event=event, method="POST", path="/admin/export-upc-mappings"):
+        return export_upc_mappings_route(event)
     if path_equals(event=event, method="POST", path="/admin/presigned-get"):
         return presigned_get_route(event)
 
@@ -107,6 +124,8 @@ def route(event):
 
     if path_equals(event=event, method="POST", path="/test"):
         return format_response(event=event, http_code=200, body={"status": "up"})
+    if path_equals(event=event, method="POST", path="/lookup-upc"):
+        return lookup_upc_route(event)
     if path_equals(event=event, method="POST", path="/submit"):
         return submit_food_route(event)
     if path_equals(event=event, method="POST", path="/presigned-post"):
