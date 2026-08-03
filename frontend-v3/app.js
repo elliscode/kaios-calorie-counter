@@ -1620,7 +1620,10 @@ function renderSearchResults(query) {
     var countB = state.usageCounts[b.id] || 0;
     if (countB !== countA) return countB - countA; // most-used first
     return a.name.localeCompare(b.name);            // then alphabetical
-  }).slice(0, 50) : [];
+  }) : [];
+  // Unbounded — full result set is rendered as DOM rows below. Revisit with
+  // a .slice(0, N) cap here if broad queries cause visible lag/nav slowdown
+  // on-device.
 
   results.forEach(function (food) {
     var li = document.createElement('li');

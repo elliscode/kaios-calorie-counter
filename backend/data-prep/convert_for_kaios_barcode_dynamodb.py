@@ -268,8 +268,8 @@ count = 0
 
 dynamo_search_maps = {}
 
-with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.tsv", "w") as upc_file:
-    with open("../data/FoodData_Central_branded_food_json_2025-12-18.json", 'r') as file:
+with open("output_my_titlecase_04_2026.jsonl", "w") as output_file, open("output_upcs.tsv", "w") as upc_file:
+    with open("../data/FoodData_Central_branded_food_json_2026-04-30.json", 'r') as file:
         raw_data = json_stream.load(file)
         for item_stream in raw_data["BrandedFoods"]:
             item = to_standard_types(item_stream)
@@ -300,7 +300,7 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
                 if quantity is None or portion_name is None:
                     sss = my_titlecase(item['householdServingFullText'])
                     if sss not in skip_file_servings:
-                        skip_file_servings.add(sss)
+                        skip_file_servings.append(sss)
                         with open('skip_file.txt', 'a') as f:
                             f.write(f"{sss}\n")
 
@@ -316,7 +316,7 @@ with open("output_my_titlecase.jsonl", "w") as output_file, open("output_upcs.ts
                 if quantity is None or portion_name is None:
                     sss = item['servingSizeUnit']
                     if sss not in skip_file_servings:
-                        skip_file_servings.add(sss)
+                        skip_file_servings.append(sss)
                         with open('skip_file.txt', 'a') as f:
                             f.write(f"{sss}\n")
                 if quantity is not None and portion_name is not None:
