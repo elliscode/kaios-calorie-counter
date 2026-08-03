@@ -297,16 +297,20 @@ def store_encrypted_collection(key1, key2, data):
 # A UPC identifies a *product*, not a food — many products (different sizes,
 # formats, regional packaging) legitimately share the same food, differing
 # only in which serving they represent. This is the join record for that:
-# (upc) -> (foodId, servingName), kept entirely separate from both the food
-# itself and the remote UPC->product lookup table. Created as a side effect
-# of submit.py's submit_food_route and admin.py's add_food_route whenever a
-# upc is present, always pointing at the submission's first serving — see
-# calorie_api/admin.py for the pending/review/export routes that manage
-# these once created.
+# (upc) -> (foodId, servingName, servingQuantity), kept entirely separate
+# from both the food itself and the remote UPC->product lookup table.
+# servingQuantity disambiguates exactly which serving row is meant (serving
+# name alone happens to be unique within a food in the current shipped
+# catalog, but this record shouldn't depend on that holding forever) — kept
+# as a plain string like serving_name, since nothing ever queries by it.
+# Created as a side effect of submit.py's submit_food_route and admin.py's
+# add_food_route whenever a upc is present, always pointing at the
+# submission's first serving — see calorie_api/admin.py for the
+# pending/review/export routes that manage these once created.
 UPC_MAPPING_TTL_SECONDS = 30 * 24 * 60 * 60  # same as submitted_food's own TTL
 
 
-def create_upc_mapping(upc, food_id, food_name, serving_name):
+def create_upc_mapping(upc, food_id, food_name, serving_name, serving_quantity):
     dynamo.put_item(
         TableName=TABLE_NAME,
         Item=python_obj_to_dynamo_obj(
@@ -317,6 +321,7 @@ def create_upc_mapping(upc, food_id, food_name, serving_name):
                 "foodId": food_id,
                 "foodName": food_name,  # denormalized for admin display — not part of the final export
                 "servingName": serving_name,
+                "servingQuantity": serving_quantity,
                 "submittedAt": int(time.time()),
                 "expiration": int(time.time()) + UPC_MAPPING_TTL_SECONDS,
             }

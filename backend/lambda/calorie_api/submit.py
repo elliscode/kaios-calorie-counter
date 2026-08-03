@@ -65,7 +65,13 @@ def submit_food_route(event, user_id, body):
     )
 
     if upc:
-        create_upc_mapping(upc=upc, food_id=food_id, food_name=name, serving_name=servings[0]["name"])
+        create_upc_mapping(
+            upc=upc,
+            food_id=food_id,
+            food_name=name,
+            serving_name=servings[0]["name"],
+            serving_quantity=str(servings[0]["quantity"]),
+        )
 
     # Dual-purpose: this same food also lands in the submitter's own synced
     # foods collection, immediately usable from their account on any device —

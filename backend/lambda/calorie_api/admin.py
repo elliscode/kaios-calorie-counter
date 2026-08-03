@@ -144,28 +144,39 @@ def add_food_route(event, admin_phone, body):
     )
 
     if upc:
-        create_upc_mapping(upc=upc, food_id=food_id, food_name=name, serving_name=servings[0]["name"])
+        create_upc_mapping(
+            upc=upc,
+            food_id=food_id,
+            food_name=name,
+            serving_name=servings[0]["name"],
+            serving_quantity=str(servings[0]["quantity"]),
+        )
 
     return format_response(event=event, http_code=200, body={"id": food_id})
 
 
-# Direct UPC->(food, serving) link, no new nutrition data involved — used
-# when the admin maps a scanned UPC to a food + serving that already exists
-# exactly as-is. All four fields required, unlike add_food_route's optional
-# upc: a mapping with no upc, foodId, or servingName isn't a mapping at all.
+# Direct UPC->(food, serving, amount) link, no new nutrition data involved —
+# used when the admin maps a scanned UPC to a food + serving that already
+# exists exactly as-is. All five fields required, unlike add_food_route's
+# optional upc: a mapping missing any of these isn't a mapping at all.
 @authenticate
 def add_upc_mapping_route(event, admin_phone, body):
     upc = (body.get("upc") or "").strip()
     food_id = (body.get("foodId") or "").strip()
     food_name = (body.get("foodName") or "").strip()
     serving_name = (body.get("servingName") or "").strip()
+    serving_quantity = (body.get("servingQuantity") or "").strip()
 
-    if not upc or not food_id or not food_name or not serving_name:
+    if not upc or not food_id or not food_name or not serving_name or not serving_quantity:
         return format_response(
-            event=event, http_code=400, body="upc, foodId, foodName, and servingName are all required"
+            event=event,
+            http_code=400,
+            body="upc, foodId, foodName, servingName, and servingQuantity are all required",
         )
 
-    create_upc_mapping(upc=upc, food_id=food_id, food_name=food_name, serving_name=serving_name)
+    create_upc_mapping(
+        upc=upc, food_id=food_id, food_name=food_name, serving_name=serving_name, serving_quantity=serving_quantity
+    )
     return format_response(event=event, http_code=200, body={"upc": upc})
 
 
@@ -276,7 +287,7 @@ def export_route(event, admin_phone, body):
 # Same accept/reject/correct/export shape as the food routes above, but for
 # the much simpler upc_mapping record (see create_upc_mapping in utils.py) —
 # no servings list, so no OPTIONAL_TEXT_FIELDS-style loop is worth sharing.
-UPC_MAPPING_OPTIONAL_FIELDS = ["foodId", "foodName", "servingName"]
+UPC_MAPPING_OPTIONAL_FIELDS = ["foodId", "foodName", "servingName", "servingQuantity"]
 
 
 @authenticate
@@ -329,10 +340,16 @@ def export_upc_mappings_route(event, admin_phone, body):
     for item in items:
         # foodName is denormalized onto the stored record purely for display
         # in this admin page — deliberately left out of the export, which is
-        # exactly the {upc, foodId, servingName} triple the local-catalog
-        # import expects.
+        # exactly the {upc, foodId, servingName, servingQuantity} the
+        # local-catalog import expects (the three things a barcode maps to,
+        # plus the upc itself).
         exported_mappings.append(
-            {"upc": item["upc"], "foodId": item["foodId"], "servingName": item["servingName"]}
+            {
+                "upc": item["upc"],
+                "foodId": item["foodId"],
+                "servingName": item["servingName"],
+                "servingQuantity": item["servingQuantity"],
+            }
         )
         dynamo.update_item(
             TableName=TABLE_NAME,

@@ -896,6 +896,35 @@ function updateUpcMappingPendingCount() {
   upcMappingEmptyStateEl.style.display = count ? 'none' : 'block';
 }
 
+// Looks up the exact serving a mapping's (foodId, servingName,
+// servingQuantity) points at, against the same combined shipped-catalog +
+// this-session data searchableFoods() already builds for the Resolve UPC
+// panel's food search — no extra network call. Requires quantity to match
+// too (not just name), same disambiguation reasoning as the mapping record
+// itself.
+function findMatchingServing(foodId, servingName, servingQuantity) {
+  if (!foodId || !servingName || servingQuantity === '' || servingQuantity == null) return null;
+  const food = searchableFoods().find(function (f) { return f.id === foodId; });
+  if (!food) return null;
+  const qty = Number(servingQuantity);
+  if (Number.isNaN(qty)) return null;
+  return (food.servings || []).find(function (s) {
+    return s.name === servingName && Number(s.quantity) === qty;
+  }) || null;
+}
+
+function renderMappingPreview(container, foodId, servingName, servingQuantity) {
+  const serving = findMatchingServing(foodId, servingName, servingQuantity);
+  if (!serving) {
+    container.innerText = 'Preview: no matching food/serving found.';
+    return;
+  }
+  container.innerText = `Preview: ${serving.calories} cal, ${serving.fat}g fat, ` +
+    `${serving.carbohydrates}g carbs, ${serving.protein}g protein` +
+    (Number(serving.caffeine) ? `, ${serving.caffeine}mg caffeine` : '') +
+    (Number(serving.alcohol) ? `, ${serving.alcohol}g alcohol` : '');
+}
+
 function buildUpcMappingCard(entry) {
   const card = document.createElement('div');
   card.className = 'card';
@@ -906,6 +935,19 @@ function buildUpcMappingCard(entry) {
   const foodIdInput = makeField(fields, 'foodId', 'Food ID', entry.foodId);
   const foodNameInput = makeField(fields, 'foodName', 'Food Name', entry.foodName);
   const servingNameInput = makeField(fields, 'servingName', 'Serving Name', entry.servingName);
+  const servingQuantityInput = makeField(fields, 'servingQuantity', 'Serving Amount', entry.servingQuantity);
+
+  const previewEl = document.createElement('div');
+  previewEl.className = 'resolve-upc-reference';
+  fields.appendChild(previewEl);
+
+  function refreshPreview() {
+    renderMappingPreview(previewEl, foodIdInput.value, servingNameInput.value, servingQuantityInput.value);
+  }
+  foodIdInput.addEventListener('input', refreshPreview);
+  servingNameInput.addEventListener('input', refreshPreview);
+  servingQuantityInput.addEventListener('input', refreshPreview);
+  refreshPreview();
 
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -917,7 +959,8 @@ function buildUpcMappingCard(entry) {
     const corrections = {
       foodId: foodIdInput.value,
       foodName: foodNameInput.value,
-      servingName: servingNameInput.value
+      servingName: servingNameInput.value,
+      servingQuantity: servingQuantityInput.value
     };
     reviewUpcMapping(entry.upc, true, card, corrections);
   });
@@ -945,6 +988,11 @@ function buildUpcMappingReadOnlyCard(entry, prepend) {
   makeReadOnlyField(fields, 'Food ID', entry.foodId);
   makeReadOnlyField(fields, 'Food Name', entry.foodName);
   makeReadOnlyField(fields, 'Serving', entry.servingName);
+  makeReadOnlyField(fields, 'Amount', entry.servingQuantity);
+  const previewEl = document.createElement('div');
+  previewEl.className = 'resolve-upc-reference';
+  renderMappingPreview(previewEl, entry.foodId, entry.servingName, entry.servingQuantity);
+  fields.appendChild(previewEl);
   card.appendChild(fields);
   if (prepend) upcMappingApprovedCardsDiv.prepend(card);
   else upcMappingApprovedCardsDiv.appendChild(card);
@@ -966,7 +1014,13 @@ async function reviewUpcMapping(upc, approved, cardEl, corrections) {
       if (approved) {
         upcMappingApprovedHeadingEl.style.display = 'block';
         buildUpcMappingReadOnlyCard(
-          { upc: upc, foodId: fieldValues.foodId, foodName: fieldValues.foodName, servingName: fieldValues.servingName },
+          {
+            upc: upc,
+            foodId: fieldValues.foodId,
+            foodName: fieldValues.foodName,
+            servingName: fieldValues.servingName,
+            servingQuantity: fieldValues.servingQuantity
+          },
           true
         );
       }
@@ -1318,9 +1372,13 @@ function renderFoodServingPicker(detailWrap, food, upc, lookupFood) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'accept';
-    btn.innerText = 'Map UPC to: ' + serving.quantity + ' ' + serving.name;
+    // Full macro breakdown right on the button — the serving object is
+    // already in hand here, no separate preview lookup needed like the
+    // mapping cards require.
+    btn.innerText = `Map UPC to: ${serving.quantity} ${serving.name} — ${serving.calories} cal, ` +
+      `${serving.fat}g fat, ${serving.carbohydrates}g carbs, ${serving.protein}g protein`;
     btn.addEventListener('click', async function () {
-      const ok = await saveUpcMapping(upc, food.id, food.name, serving.name);
+      const ok = await saveUpcMapping(upc, food.id, food.name, serving.name, serving.quantity);
       if (ok) closeResolveUpcPanel();
     });
     detailWrap.appendChild(btn);
@@ -1336,12 +1394,19 @@ function renderFoodServingPicker(detailWrap, food, upc, lookupFood) {
   detailWrap.appendChild(newServingBtn);
 }
 
-async function saveUpcMapping(upc, foodId, foodName, servingName) {
+async function saveUpcMapping(upc, foodId, foodName, servingName, servingQuantity) {
   try {
     const response = await fetch(`${BASE_URL}/add-upc-mapping`, {
       method: 'POST',
       credentials: 'include',
-      body: JSON.stringify({ csrf: csrfToken, upc: upc, foodId: foodId, foodName: foodName, servingName: servingName })
+      body: JSON.stringify({
+        csrf: csrfToken,
+        upc: upc,
+        foodId: foodId,
+        foodName: foodName,
+        servingName: servingName,
+        servingQuantity: servingQuantity
+      })
     });
     if (response.status >= 200 && response.status < 300) {
       displayError('');
