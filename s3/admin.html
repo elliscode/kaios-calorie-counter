@@ -18,7 +18,7 @@
   h2 { font-size: 15px; color: #2E7D32; margin: 24px 0 12px; }
   .login { max-width: 360px; margin: 60px auto; }
   .login label { display: block; margin: 12px 0; font-size: 14px; }
-  input {
+  input, textarea {
     font-size: 14px;
     padding: 8px;
     width: 100%;
@@ -27,6 +27,7 @@
     border-radius: 4px;
     margin-top: 4px;
   }
+  textarea { font-family: monospace; font-size: 12px; resize: vertical; }
   button {
     font-size: 14px;
     padding: 8px 14px;
@@ -62,7 +63,7 @@
   #scan-cancel-btn { background: #c0392b; }
   #scan-cancel-btn:hover { background: #d9483a; }
 
-  #add-food-panel, #resolve-upc-panel { display: flex; flex-direction: column; gap: 10px; }
+  #add-food-panel, #resolve-upc-panel, #edit-food-panel { display: flex; flex-direction: column; gap: 10px; }
   .field-hint { font-size: 12px; color: #666; margin: -4px 0 4px; }
 
   .resolve-upc-reference {
@@ -267,6 +268,7 @@
       <span id="pending-count"></span>
       <div class="topbar-actions">
         <button id="add-food-btn" onclick="openAddFoodPanel();">+ Add Food</button>
+        <button id="edit-food-btn" onclick="openEditFoodPanel();">Edit Food</button>
         <button id="scan-btn" onclick="openScanPanel();">Scan Barcode</button>
         <button id="export-btn" onclick="exportToJson();">Export to JSON</button>
       </div>
@@ -279,6 +281,7 @@
 
     <div id="add-food-panel" class="card" style="display:none;"></div>
     <div id="resolve-upc-panel" class="card" style="display:none;"></div>
+    <div id="edit-food-panel" class="card" style="display:none;"></div>
 
     <div id="cards"></div>
     <p id="empty-state" style="display:none;">Nothing pending review.</p>
@@ -319,6 +322,7 @@ const scanVideoWrap = document.getElementById('scan-video-wrap');
 const scanVideoEl = document.getElementById('scan-video');
 const addFoodPanel = document.getElementById('add-food-panel');
 const resolveUpcPanel = document.getElementById('resolve-upc-panel');
+const editFoodPanel = document.getElementById('edit-food-panel');
 const upcMappingCardsDiv = document.getElementById('upc-mapping-cards');
 const upcMappingEmptyStateEl = document.getElementById('upc-mapping-empty-state');
 const upcMappingPendingCountEl = document.getElementById('upc-mapping-pending-count');
@@ -432,11 +436,20 @@ async function loadPending() {
   upcMappingCardsDiv.innerHTML = '';
   upcMappingApprovedCardsDiv.innerHTML = '';
   try {
-    const response = await fetch(`${BASE_URL}/pending`, {
-      method: 'POST',
-      credentials: 'include',
-      body: JSON.stringify({ csrf: csrfToken })
-    });
+    // Fetched in parallel, not just left to the Resolve UPC panel's own
+    // lazy load — UPC-mapping card previews below need searchableFoods()
+    // just as much as that panel's food search does, and this can run on
+    // page load/login, before any scan has ever happened this session.
+    // loadLocalFoodCatalog() memoizes, so this costs nothing once it's
+    // already loaded.
+    const [response] = await Promise.all([
+      fetch(`${BASE_URL}/pending`, {
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify({ csrf: csrfToken })
+      }),
+      loadLocalFoodCatalog()
+    ]);
     if (response.status < 200 || response.status >= 300) {
       displayError('Could not load pending submissions.');
       return;
@@ -555,6 +568,101 @@ function collectServings(container) {
   });
 }
 
+// Recognized per-serving fields — mirrors parse_serving in
+// calorie_api/utils.py. Anything else on a pasted serving object (upc/date
+// live at the top level, not per-serving, but this stays defensive either
+// way) is silently dropped rather than rejected.
+const SERVING_JSON_FIELDS = ['name', 'quantity', 'calories', 'fat', 'carbohydrates', 'protein', 'caffeine', 'alcohol'];
+
+function normalizeServingFromJson(raw) {
+  const serving = {};
+  SERVING_JSON_FIELDS.forEach(function (field) {
+    if (raw && raw[field] !== undefined && raw[field] !== null) serving[field] = raw[field];
+  });
+  return serving;
+}
+
+// Accepts a food JSON object shaped like a line from
+// backend/data-prep/output_my_titlecase.jsonl ({name, upc, date,
+// servings}) or the collated local-catalog shape ({id, name, servings}) —
+// only name/servings are ever used; upc, date, id, and anything else are
+// deliberately ignored, since a food record has no upc field of its own
+// (see backend/README.md's UPC mappings note) and no other field this form
+// edits.
+function parseFoodJson(text) {
+  const data = JSON.parse(text);
+  if (!data || typeof data !== 'object') throw new Error('Expected a JSON object');
+  const name = (data.name || '').toString().trim();
+  if (!name) throw new Error('JSON must include a "name"');
+  if (!Array.isArray(data.servings) || !data.servings.length) {
+    throw new Error('JSON must include a non-empty "servings" array');
+  }
+  return { name: name, servings: data.servings.map(normalizeServingFromJson) };
+}
+
+// Shared by buildCard, renderApprovedEditable, and renderAddFoodPanel — an
+// "Edit as JSON" toggle that lets a whole food (name + servings) be pasted
+// in at once, e.g. straight from output_my_titlecase.jsonl, instead of
+// typing each serving in by hand. Replaces whatever's currently in
+// nameInput/servingsContainer outright, same as picking a fresh food would.
+function addJsonEditControls(fields, nameInput, servingsContainer) {
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'edit-approved';
+  toggleBtn.innerText = 'Edit as JSON';
+  fields.appendChild(toggleBtn);
+
+  const jsonWrap = document.createElement('div');
+  jsonWrap.className = 'field';
+  jsonWrap.style.display = 'none';
+  const jsonLabel = document.createElement('label');
+  jsonLabel.innerText = 'Paste food JSON ({name, servings, ...}) — extra fields like upc/date are ignored';
+  const jsonTextarea = document.createElement('textarea');
+  jsonTextarea.rows = 6;
+  jsonWrap.appendChild(jsonLabel);
+  jsonWrap.appendChild(jsonTextarea);
+
+  const jsonActions = document.createElement('div');
+  jsonActions.className = 'actions';
+
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.className = 'accept';
+  applyBtn.innerText = 'Apply JSON';
+  applyBtn.addEventListener('click', function () {
+    try {
+      const parsed = parseFoodJson(jsonTextarea.value);
+      nameInput.value = parsed.name;
+      servingsContainer.innerHTML = '';
+      parsed.servings.forEach(function (serving, i) {
+        makeServingBlock(servingsContainer, i, serving);
+      });
+      jsonWrap.style.display = 'none';
+      jsonTextarea.value = '';
+      displayError('');
+    } catch (err) {
+      displayError('Invalid food JSON: ' + err.message);
+    }
+  });
+  jsonActions.appendChild(applyBtn);
+
+  const jsonCancelBtn = document.createElement('button');
+  jsonCancelBtn.type = 'button';
+  jsonCancelBtn.className = 'cancel-edit';
+  jsonCancelBtn.innerText = 'Cancel';
+  jsonCancelBtn.addEventListener('click', function () {
+    jsonWrap.style.display = 'none';
+    jsonTextarea.value = '';
+  });
+  jsonActions.appendChild(jsonCancelBtn);
+  jsonWrap.appendChild(jsonActions);
+  fields.appendChild(jsonWrap);
+
+  toggleBtn.addEventListener('click', function () {
+    jsonWrap.style.display = jsonWrap.style.display === 'none' ? 'block' : 'none';
+  });
+}
+
 // Longest time left first, soonest-to-expire last -- keeps whatever needs
 // review most urgently at the bottom, easy to spot without having to scan
 // every card's "Deletes from database in" line. Applied within each
@@ -636,6 +744,8 @@ function buildCard(entry) {
     });
   });
   fields.appendChild(addServingBtn);
+
+  addJsonEditControls(fields, nameInput, servingsContainer);
 
   appendExpirationInfo(fields, entry);
 
@@ -758,6 +868,8 @@ function renderApprovedEditable(card, entry) {
     });
   });
   fields.appendChild(addServingBtn);
+
+  addJsonEditControls(fields, nameInput, servingsContainer);
 
   appendExpirationInfo(fields, entry);
 
@@ -896,33 +1008,55 @@ function updateUpcMappingPendingCount() {
   upcMappingEmptyStateEl.style.display = count ? 'none' : 'block';
 }
 
-// Looks up the exact serving a mapping's (foodId, servingName,
-// servingQuantity) points at, against the same combined shipped-catalog +
-// this-session data searchableFoods() already builds for the Resolve UPC
-// panel's food search — no extra network call. Requires quantity to match
-// too (not just name), same disambiguation reasoning as the mapping record
-// itself.
-function findMatchingServing(foodId, servingName, servingQuantity) {
-  if (!foodId || !servingName || servingQuantity === '' || servingQuantity == null) return null;
+// Looks up a mapping's target serving by (foodId, servingName) only —
+// against the same combined shipped-catalog + this-session data
+// searchableFoods() already builds for the Resolve UPC panel's food search,
+// no extra network call. Not matched by quantity: a mapping's
+// servingQuantity is a *modifiable* amount, not required to equal the
+// food's own serving quantity (e.g. the food's "g" serving might be defined
+// at 100g, but a scanned product is a 59g package — see computeScaledServing).
+function findBaseServing(foodId, servingName) {
+  if (!foodId || !servingName) return null;
   const food = searchableFoods().find(function (f) { return f.id === foodId; });
   if (!food) return null;
-  const qty = Number(servingQuantity);
-  if (Number.isNaN(qty)) return null;
-  return (food.servings || []).find(function (s) {
-    return s.name === servingName && Number(s.quantity) === qty;
-  }) || null;
+  return (food.servings || []).find(function (s) { return s.name === servingName; }) || null;
+}
+
+// Scales the base serving's values by servingQuantity / baseServing.quantity
+// — same ratio math as backend/data-prep/convert_for_kaios_barcode_dynamodb.py
+// uses to derive a product's serving from its 100g reference. A mapping
+// whose amount happens to equal the base serving's own quantity scales by
+// exactly 1, so this covers the "picked an existing serving as-is" case too.
+function computeScaledServing(foodId, servingName, servingQuantity) {
+  const baseServing = findBaseServing(foodId, servingName);
+  if (!baseServing) return null;
+  const baseQty = Number(baseServing.quantity);
+  const mappedQty = Number(servingQuantity);
+  if (!baseQty || Number.isNaN(baseQty) || servingQuantity === '' || servingQuantity == null || Number.isNaN(mappedQty)) {
+    return null;
+  }
+  const ratio = mappedQty / baseQty;
+  const scale = function (value) { return Math.round(Number(value || 0) * ratio * 100) / 100; };
+  return {
+    calories: scale(baseServing.calories),
+    fat: scale(baseServing.fat),
+    carbohydrates: scale(baseServing.carbohydrates),
+    protein: scale(baseServing.protein),
+    caffeine: scale(baseServing.caffeine),
+    alcohol: scale(baseServing.alcohol)
+  };
 }
 
 function renderMappingPreview(container, foodId, servingName, servingQuantity) {
-  const serving = findMatchingServing(foodId, servingName, servingQuantity);
-  if (!serving) {
+  const scaled = computeScaledServing(foodId, servingName, servingQuantity);
+  if (!scaled) {
     container.innerText = 'Preview: no matching food/serving found.';
     return;
   }
-  container.innerText = `Preview: ${serving.calories} cal, ${serving.fat}g fat, ` +
-    `${serving.carbohydrates}g carbs, ${serving.protein}g protein` +
-    (Number(serving.caffeine) ? `, ${serving.caffeine}mg caffeine` : '') +
-    (Number(serving.alcohol) ? `, ${serving.alcohol}g alcohol` : '');
+  container.innerText = `Preview (${servingQuantity} ${servingName}): ${scaled.calories} cal, ${scaled.fat}g fat, ` +
+    `${scaled.carbohydrates}g carbs, ${scaled.protein}g protein` +
+    (scaled.caffeine ? `, ${scaled.caffeine}mg caffeine` : '') +
+    (scaled.alcohol ? `, ${scaled.alcohol}g alcohol` : '');
 }
 
 function buildUpcMappingCard(entry) {
@@ -979,8 +1113,20 @@ function buildUpcMappingCard(entry) {
   upcMappingCardsDiv.appendChild(card);
 }
 
+// Approved-but-not-yet-exported. Display-only by default but editable on
+// demand, same split as renderApprovedReadOnly/renderApprovedEditable for
+// foods — editing re-uses /admin/review-upc-mapping (already accepts
+// corrections for any mapping regardless of its current approved state)
+// rather than a separate endpoint.
 function buildUpcMappingReadOnlyCard(entry, prepend) {
   const card = document.createElement('div');
+  renderUpcMappingReadOnly(card, entry);
+  if (prepend) upcMappingApprovedCardsDiv.prepend(card);
+  else upcMappingApprovedCardsDiv.appendChild(card);
+}
+
+function renderUpcMappingReadOnly(card, entry) {
+  card.innerHTML = '';
   card.className = 'card readonly';
   const fields = document.createElement('div');
   fields.className = 'card-fields';
@@ -993,9 +1139,94 @@ function buildUpcMappingReadOnlyCard(entry, prepend) {
   previewEl.className = 'resolve-upc-reference';
   renderMappingPreview(previewEl, entry.foodId, entry.servingName, entry.servingQuantity);
   fields.appendChild(previewEl);
+
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'edit-approved';
+  editBtn.innerText = 'Edit';
+  editBtn.addEventListener('click', function () { renderUpcMappingEditable(card, entry); });
+  fields.appendChild(editBtn);
+
   card.appendChild(fields);
-  if (prepend) upcMappingApprovedCardsDiv.prepend(card);
-  else upcMappingApprovedCardsDiv.appendChild(card);
+}
+
+function renderUpcMappingEditable(card, entry) {
+  card.innerHTML = '';
+  card.className = 'card readonly';
+  const fields = document.createElement('div');
+  fields.className = 'card-fields';
+  makeReadOnlyField(fields, 'UPC', entry.upc);
+  const foodIdInput = makeField(fields, 'foodId', 'Food ID', entry.foodId);
+  const foodNameInput = makeField(fields, 'foodName', 'Food Name', entry.foodName);
+  const servingNameInput = makeField(fields, 'servingName', 'Serving Name', entry.servingName);
+  const servingQuantityInput = makeField(fields, 'servingQuantity', 'Serving Amount', entry.servingQuantity);
+
+  const previewEl = document.createElement('div');
+  previewEl.className = 'resolve-upc-reference';
+  fields.appendChild(previewEl);
+  function refreshPreview() {
+    renderMappingPreview(previewEl, foodIdInput.value, servingNameInput.value, servingQuantityInput.value);
+  }
+  foodIdInput.addEventListener('input', refreshPreview);
+  servingNameInput.addEventListener('input', refreshPreview);
+  servingQuantityInput.addEventListener('input', refreshPreview);
+  refreshPreview();
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.innerText = 'Save';
+  saveBtn.className = 'accept';
+  saveBtn.addEventListener('click', async function () {
+    const updatedEntry = {
+      upc: entry.upc,
+      foodId: foodIdInput.value,
+      foodName: foodNameInput.value,
+      servingName: servingNameInput.value,
+      servingQuantity: servingQuantityInput.value
+    };
+    const ok = await saveUpcMappingEdits(updatedEntry);
+    if (ok) renderUpcMappingReadOnly(card, updatedEntry);
+  });
+  actions.appendChild(saveBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'cancel-edit';
+  cancelBtn.innerText = 'Cancel';
+  cancelBtn.addEventListener('click', function () { renderUpcMappingReadOnly(card, entry); });
+  actions.appendChild(cancelBtn);
+
+  fields.appendChild(actions);
+  card.appendChild(fields);
+}
+
+// Unlike reviewUpcMapping() (pending -> approved, moves/removes the card),
+// this just corrects an already-approved mapping's fields in place — no
+// card movement, no re-fetch of /admin/pending.
+async function saveUpcMappingEdits(updatedEntry) {
+  try {
+    const response = await fetch(`${BASE_URL}/review-upc-mapping`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({
+        csrf: csrfToken,
+        upc: updatedEntry.upc,
+        approved: true,
+        foodId: updatedEntry.foodId,
+        foodName: updatedEntry.foodName,
+        servingName: updatedEntry.servingName,
+        servingQuantity: updatedEntry.servingQuantity
+      })
+    });
+    if (response.status >= 200 && response.status < 300) {
+      displayError('');
+      return true;
+    }
+  } catch {}
+  displayError('Error saving changes, please try again.');
+  return false;
 }
 
 async function reviewUpcMapping(upc, approved, cardEl, corrections) {
@@ -1055,24 +1286,31 @@ async function exportUpcMappingsToJson() {
   }
 }
 
-// --- Add Food (manual entry, or a scan resolved as "new food"/"new serving
-// size on an existing food") ------------------------------------------------
+// --- Add Food (manual entry, a scan resolved as "new food"/"new serving
+// size on an existing food", or an existing food pulled back in for a full
+// edit via Edit Food below) --------------------------------------------------
 // All entry points converge on renderAddFoodPanel/saveNewFood, which POSTs
 // to /admin/add-food — the admin-console equivalent of the app's own
 // "+ Add New Food" submission, landing in the exact same pending queue.
 // scanContext is undefined for the plain "+ Add Food" button; when present
-// it carries whatever the Resolve UPC panel already knows (see below).
+// it carries whatever the Resolve UPC panel or Edit Food search already knows.
 
 function openAddFoodPanel(scanContext) {
   displayError('');
   closeResolveUpcPanel();
+  closeEditFoodPanel();
   const ctx = scanContext || {};
   const blankServing = { name: '', quantity: '', calories: '', fat: '', carbohydrates: '', protein: '', caffeine: '', alcohol: '' };
   const lookupServings = ctx.lookupFood && ctx.lookupFood.servings && ctx.lookupFood.servings.length
     ? ctx.lookupFood.servings
     : null;
   let hint = '';
-  if (ctx.foodId) {
+  if (ctx.editServings) {
+    hint = `Editing "${ctx.foodName}" — Save creates a corrected pending entry under this food's existing ID, ` +
+      `reviewed/exported like any other submission. This replaces the food's servings wholesale on export, ` +
+      `unlike a "new serving size" addition which only adds to them — worth remembering when you eventually ` +
+      `merge the export back into the local catalog.`;
+  } else if (ctx.foodId) {
     hint = `Adding a new serving size to "${ctx.foodName}" — only enter the one new serving, not the food's others.`;
   } else if (ctx.upc) {
     hint = 'First serving below is what this UPC will be mapped to.';
@@ -1081,7 +1319,7 @@ function openAddFoodPanel(scanContext) {
     name: ctx.foodName || (ctx.lookupFood && ctx.lookupFood.name) || '',
     upc: ctx.upc || '',
     foodId: ctx.foodId || null,
-    servings: lookupServings || [blankServing],
+    servings: ctx.editServings || lookupServings || [blankServing],
     hint: hint
   });
 }
@@ -1128,6 +1366,8 @@ function renderAddFoodPanel(prefill) {
     });
   });
   fields.appendChild(addServingBtn);
+
+  addJsonEditControls(fields, nameInput, servingsContainer);
 
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -1176,6 +1416,91 @@ async function saveNewFood(name, upc, servings, foodId) {
   return false;
 }
 
+// --- Edit Food ---------------------------------------------------------------
+// Pulls an existing food (from the shipped local catalog, or this session's
+// own pending/approved submissions — searchableFoods() already covers both)
+// back into the Add Food panel, pre-filled with its full current servings
+// and foodId set to its real id. Saving reuses add_food_route exactly like
+// the Resolve UPC panel's "new serving size" path does — the only
+// difference is *all* the servings are up for editing here, not just one.
+
+function openEditFoodPanel() {
+  displayError('');
+  closeAddFoodPanel();
+  closeResolveUpcPanel();
+  renderEditFoodSearchPanel();
+}
+
+function closeEditFoodPanel() {
+  editFoodPanel.style.display = 'none';
+  editFoodPanel.innerHTML = '';
+}
+
+async function renderEditFoodSearchPanel() {
+  await loadLocalFoodCatalog();
+
+  editFoodPanel.innerHTML = '';
+  editFoodPanel.style.display = 'flex';
+
+  const title = document.createElement('h2');
+  title.innerText = 'Edit Food';
+  editFoodPanel.appendChild(title);
+
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'field';
+  const searchLabel = document.createElement('label');
+  searchLabel.innerText = 'Search foods to edit';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'e.g. Graham Crackers';
+  searchWrap.appendChild(searchLabel);
+  searchWrap.appendChild(searchInput);
+  editFoodPanel.appendChild(searchWrap);
+
+  const resultsList = document.createElement('div');
+  resultsList.className = 'resolve-upc-results';
+  editFoodPanel.appendChild(resultsList);
+
+  searchInput.addEventListener('input', function () {
+    renderEditFoodResults(resultsList, searchInput.value);
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'cancel-edit';
+  cancelBtn.innerText = 'Cancel';
+  cancelBtn.addEventListener('click', closeEditFoodPanel);
+  editFoodPanel.appendChild(cancelBtn);
+}
+
+function renderEditFoodResults(resultsList, query) {
+  resultsList.innerHTML = '';
+  const q = query.trim().toLowerCase();
+  if (!q) return;
+
+  const matches = searchableFoods().filter(function (food) {
+    return food.name.toLowerCase().indexOf(q) !== -1;
+  }).slice(0, 20);
+
+  if (!matches.length) {
+    const none = document.createElement('div');
+    none.className = 'resolve-upc-result-row resolve-upc-no-results';
+    none.innerText = 'No matches';
+    resultsList.appendChild(none);
+    return;
+  }
+
+  matches.forEach(function (food) {
+    const row = document.createElement('div');
+    row.className = 'resolve-upc-result-row';
+    row.innerText = food.name;
+    row.addEventListener('click', function () {
+      openAddFoodPanel({ foodId: food.id, foodName: food.name, editServings: food.servings });
+    });
+    resultsList.appendChild(row);
+  });
+}
+
 // --- Barcode scan -> Resolve UPC panel --------------------------------------
 // A UPC identifies a *product*, not a food (see backend/README.md's "UPC
 // mappings" note) — scanning never creates a food directly. It always opens
@@ -1195,6 +1520,7 @@ async function openScanPanel() {
   displayError('');
   closeAddFoodPanel();
   closeResolveUpcPanel();
+  closeEditFoodPanel();
   scanVideoWrap.style.display = 'block';
 
   try {
