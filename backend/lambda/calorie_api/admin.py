@@ -10,6 +10,8 @@ from .utils import (
     decimal_to_number,
     parse_servings,
     create_upc_mapping,
+    load_encrypted_collection,
+    store_encrypted_collection,
     TABLE_NAME,
     GUID_REGEX,
 )
@@ -161,11 +163,15 @@ def add_food_route(event, admin_phone, body):
 # optional upc: a mapping missing any of these isn't a mapping at all.
 @authenticate
 def add_upc_mapping_route(event, admin_phone, body):
-    upc = (body.get("upc") or "").strip()
-    food_id = (body.get("foodId") or "").strip()
-    food_name = (body.get("foodName") or "").strip()
-    serving_name = (body.get("servingName") or "").strip()
-    serving_quantity = (body.get("servingQuantity") or "").strip()
+    # str()-wrapped, not just .strip()'d — servingQuantity in particular
+    # arrives as a JSON number (not a string) from the Resolve UPC panel's
+    # "Map UPC to:" button (it sends a food's existing serving.quantity
+    # as-is), and .strip() on an int/float raises AttributeError -> 500.
+    upc = str(body.get("upc") or "").strip()
+    food_id = str(body.get("foodId") or "").strip()
+    food_name = str(body.get("foodName") or "").strip()
+    serving_name = str(body.get("servingName") or "").strip()
+    serving_quantity = str(body.get("servingQuantity") or "").strip()
 
     if not upc or not food_id or not food_name or not serving_name or not serving_quantity:
         return format_response(
@@ -252,13 +258,36 @@ def review_route(event, admin_phone, body):
         expr_values[value_placeholder] = value
         set_clauses.append(f"{name_placeholder} = {value_placeholder}")
 
-    dynamo.update_item(
+    result = dynamo.update_item(
         TableName=TABLE_NAME,
         Key=python_obj_to_dynamo_obj({"key1": "submitted_food", "key2": food_id}),
         UpdateExpression="SET " + ", ".join(set_clauses),
         ExpressionAttributeNames=expr_names,
         ExpressionAttributeValues=python_obj_to_dynamo_obj(expr_values),
+        ReturnValues="ALL_NEW",
     )
+
+    # Keep the original submitter's own synced copy (see submit_food_route's
+    # dual-write into user_foods) matching whatever gets corrected here —
+    # otherwise a name/servings fix made during review only ever shows up in
+    # the export, never on the submitter's own device. Only submissions from
+    # the app carry a userId at all (add_food_route's admin-created ones
+    # don't — there's no end-user to sync back to), and only if that user
+    # still has this food and hasn't deleted it locally in the meantime.
+    if "name" in updates or "servings" in updates:
+        updated_item = {k: decimal_to_number(v) for k, v in dynamo_obj_to_python_obj(result["Attributes"]).items()}
+        user_id = updated_item.get("userId")
+        if user_id:
+            user_foods = load_encrypted_collection("user_foods", user_id)
+            existing = user_foods.get(food_id)
+            if existing and not existing.get("deleted"):
+                user_foods[food_id] = {
+                    "name": updated_item["name"],
+                    "servings": updated_item["servings"],
+                    "updated": int(time.time()),
+                    "deleted": False,
+                }
+                store_encrypted_collection("user_foods", user_id, user_foods)
 
     return format_response(event=event, http_code=200, body={"id": food_id, "approved": approved})
 
@@ -292,7 +321,7 @@ UPC_MAPPING_OPTIONAL_FIELDS = ["foodId", "foodName", "servingName", "servingQuan
 
 @authenticate
 def review_upc_mapping_route(event, admin_phone, body):
-    upc = (body.get("upc") or "").strip()
+    upc = str(body.get("upc") or "").strip()
     approved = body.get("approved")
 
     if not upc:
@@ -302,9 +331,11 @@ def review_upc_mapping_route(event, admin_phone, body):
 
     updates = {"approved": approved, "reviewedAt": int(time.time())}
 
+    # str()-wrapped for the same reason as add_upc_mapping_route above —
+    # servingQuantity isn't guaranteed to arrive as a JSON string.
     for field in UPC_MAPPING_OPTIONAL_FIELDS:
         if field in body:
-            value = (body.get(field) or "").strip()
+            value = str(body.get(field) or "").strip()
             if not value:
                 return format_response(event=event, http_code=400, body=f"{field} cannot be empty if provided")
             updates[field] = value

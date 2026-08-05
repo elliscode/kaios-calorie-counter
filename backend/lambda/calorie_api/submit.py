@@ -60,6 +60,13 @@ def submit_food_route(event, user_id, body):
                 "status": "pending",
                 "submittedAt": int(time.time()),
                 "expiration": int(time.time()) + SUBMISSION_TTL_SECONDS,
+                # Internal bookkeeping — like submittedAt/status, visible in the
+                # raw /admin/pending payload (only the admin sees it) but never
+                # in export_route's output. Lets review_route (calorie_api/
+                # admin.py) write a name/servings correction back into this same
+                # submitter's own user_foods entry, so their local copy doesn't
+                # drift from whatever an admin actually approves/exports.
+                "userId": user_id,
             }
         ),
     )
