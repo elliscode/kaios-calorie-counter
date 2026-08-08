@@ -97,6 +97,13 @@ servings_fix_these_phrases = [
     {'find': re.compile(r'\s+', re.IGNORECASE), 'replace': ' '},
     {'find': re.compile(r'\(\d+g\)\s*', re.IGNORECASE), 'replace': ''},
 ]
+# A trailing "(...)" containing a digit (e.g. "(12 fl oz)", "(6" dia)") is what
+# distinguishes two differently-sized portions of the same food that otherwise
+# reduce to the same unit word (e.g. "1 can or bottle (12 fl oz)" vs "(16 fl
+# oz)" both becoming "can or bottle"). The strip-trailing-parens phrase above
+# would silently drop that distinguishing text, so it's captured beforehand
+# and re-appended to the parsed unit in parse_portion.
+size_qualifier_pattern = re.compile(r'\(([^()]*\d[^()]*)\)\s*$')
 servings_post_processing = [
     {'find': re.compile(r'^"+ ([a-z]+)\s*.*', re.IGNORECASE), 'replace': r'1-inch \1'},
     {'find': re.compile(r'^abr$', re.IGNORECASE), 'replace': 'bar'},
@@ -127,6 +134,19 @@ macros = {
     'Alcohol, ethyl': 'alcohol',
     'Caffeine': 'caffeine',
 }
+
+# USDA reports "Energy" twice per food — once in kcal, once in kJ — as two
+# separate foodNutrients entries with the *same* nutrient name, distinguished
+# only by unitName. Matching on name alone (as this script used to) silently
+# takes whichever one comes later in the array, which is sometimes the kJ
+# entry (see convert_foundation_foods_for_kaios_local.py's own copy of this
+# comment for a concrete example this exact bug produced). Only fat/protein/
+# carbs/caffeine/alcohol map to a single unambiguous unit (always grams or
+# mg), so this check only needs to apply to the calories mapping.
+def is_usable_macro_value(mapped_key, nutrient):
+    if mapped_key != 'calories':
+        return True
+    return (nutrient['nutrient'].get('unitName') or '').strip().lower() == 'kcal'
 
 apostrophe_s = re.compile(r"'S")
 whitespace = re.compile(r"\s+")
@@ -160,21 +180,28 @@ def portion_name_post_process(portion_name: str):
             return None
     return p
 
-def parse_portion(q: float, p: str):
+def parse_portion(q: float, p: str) -> tuple:
+    """Returns (quantity, unit, size_qualifier). size_qualifier is appended by
+    the caller *after* portion_name_post_process, since that strips trailing
+    symbols (including a bare closing paren) and would otherwise mangle it."""
     if p in skip_file_servings:
-        return None, None
+        return None, None, None
+    qualifier_match = size_qualifier_pattern.search(p)
+    size_qualifier = qualifier_match[1].strip() if qualifier_match else None
     for phrase in servings_fix_these_phrases:
         p = phrase['find'].sub(phrase['replace'], p)
     if is_portion_stupid(p):
-        return None, None
+        return None, None, None
     if not p or p == 'None':
         p = '1 serving'
     if p in replacement_servings.keys():
-        return eval(replacement_servings[p]["q"]), replacement_servings[p]["unit"].strip()
+        return eval(replacement_servings[p]["q"]), replacement_servings[p]["unit"].strip(), size_qualifier
     matching_regex = find_matching_regex(p)
     if matching_regex:
-        return actually_parse(q, p, matching_regex)
-    return show_override_console(p)
+        parsed_q, unit, leftover_qualifier = actually_parse(q, p, matching_regex)
+        return parsed_q, unit, leftover_qualifier or size_qualifier
+    unit_q, unit_v = show_override_console(p)
+    return unit_q, unit_v, size_qualifier
 
 def find_matching_regex(p)-> re.Pattern[str] | None:
     for acceptable_serving in acceptable_servings:
@@ -185,10 +212,19 @@ def find_matching_regex(p)-> re.Pattern[str] | None:
 def actually_parse(q: float, p: str, pattern: re.Pattern[str]):
     result = pattern.match(p)
     if len(result.groups()) == 1:
-        return q, result[1]
+        parsed_q, unit = q, result[1]
     elif len(result.groups()) == 2:
-        return eval(result[1]), result[2]
-    return None, None
+        parsed_q, unit = eval(result[1]), result[2]
+    else:
+        return None, None, None
+    # Several acceptable_servings patterns aren't end-anchored, so e.g. "1
+    # regular" matches inside "1 regular or 6" submarine" and silently
+    # truncates the rest. Keep any leftover text that still carries a digit
+    # instead of losing the thing that would've distinguished this portion
+    # from a same-named sibling.
+    leftover = re.sub(r'^(or|and)\s+', '', p[result.end():].strip(' ,'), flags=re.IGNORECASE)
+    leftover_qualifier = leftover if re.search(r'\d', leftover) else None
+    return parsed_q, unit, leftover_qualifier
 
 def is_portion_stupid(input_text):
     if input_text in skip_file_servings:
@@ -250,14 +286,15 @@ with open("../data/surveyDownload.json", 'r') as file:
 
         serving_100g = {'name': 'g', 'quantity': 100.0}
         for nutrient in item['foodNutrients']:
-            if nutrient['nutrient']['name'] in macros.keys():
-                serving_100g[macros[nutrient['nutrient']['name']]] = nutrient['amount']
+            name = nutrient['nutrient']['name']
+            if name in macros.keys() and is_usable_macro_value(macros[name], nutrient):
+                serving_100g[macros[name]] = nutrient['amount']
 
         servings = []
         for portion in item['foodPortions']:
             portion_name = portion['portionDescription']
             quantity = 1
-            quantity, portion_name = parse_portion(quantity, portion_name)
+            quantity, portion_name, size_qualifier = parse_portion(quantity, portion_name)
             portion_name = portion_name_post_process(portion_name)
             if quantity is None or portion_name is None:
                 sss = portion['portionDescription']
@@ -266,6 +303,8 @@ with open("../data/surveyDownload.json", 'r') as file:
                     with open('skip_file.txt', 'a') as f:
                         f.write(f"{sss}\n")
                 continue
+            if size_qualifier:
+                portion_name = f"{portion_name} ({size_qualifier})"
             portion_grams = portion['gramWeight']
             ratio = portion_grams / 100.0
             serving = {'name': portion_name, 'quantity': quantity}

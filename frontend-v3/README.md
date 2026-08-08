@@ -18,7 +18,7 @@ frontend-v3/
     loader.css                  — initial loading screen / spinner
   tests/
     fixtures/               — small sample manifest.json + foods file for Playwright
-    *.spec.js                — 88 tests across 21 files
+    *.spec.js                — 89 tests across 20 files
 ```
 
 ## Screens
@@ -28,13 +28,13 @@ frontend-v3/
 | Diary | Date picker + logged foods for that day + daily totals |
 | Search | Find catalog/custom foods/recipes; queue several via the Tray, or add one directly. "+ Add new food" / "+ Add new recipe" / "+ Add guesstimate" always sit at the bottom |
 | Servings | Adjust quantity/unit for a diary entry, view the full nutrient breakdown, delete. Doubles as the "how much of this ingredient" picker when building a recipe |
-| New Food | Submit a custom food (name, servings, optional extra servings, optional nutrition-facts photo) — requires login |
+| New Food | Submit a custom food (name, servings, optional extra servings, optional UPC) — works fully anonymously; login just attaches the submission to an account |
 | Recipe Builder | Name a recipe, add ingredients (each at its own quantity via Search → Servings), set a servings count; bakes nutrition-per-serving once at save |
 | Guesstimate | Two fields only — name + a calorie guess — for a fast, one-off diary entry that never becomes a searchable food |
 | Options | App version, login status, Show Caffeine toggle, My Foods, My Recipes, Clear Local DB |
 | My Foods | Foods you've submitted, with computed status (Local / Approval Pending / Approved / Rejected); delete or re-submit |
 | My Recipes | Recipes you've created; delete |
-| Log In (email / code) | Email + one-time code — optional everywhere except submitting a new food |
+| Log In (email / code) | Email + one-time code — entirely optional, everywhere including submitting a new food |
 
 Navigation is purely panel-based — no page loads, same pattern as the shared-list reference app.
 

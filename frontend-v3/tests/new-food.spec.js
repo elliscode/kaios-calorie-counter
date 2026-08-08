@@ -123,7 +123,7 @@ test('center/Enter steps through fields ("Next") and only submits from the Submi
   await page.locator('#input-new-food-protein').fill('20');
   await page.locator('#input-new-food-protein').press('Enter');
   // Submit is now the very next stop, right after Protein — the advanced/
-  // optional stuff (extra servings, photo) comes after it, not before, so
+  // optional stuff (extra servings, UPC) comes after it, not before, so
   // the default path for most people is just Submit.
   await expect(page.locator('#btn-new-food-submit')).toHaveAttribute('nav-selected', 'true');
   await expect(page.locator('#sk-center')).toHaveText('Submit');
@@ -135,9 +135,9 @@ test('center/Enter steps through fields ("Next") and only submits from the Submi
   await expect(page.locator('#sk-center')).toHaveText('Next');
   await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
 
-  // Arrow past that onto the photo file field — still "Next", still hasn't submitted.
+  // Arrow past that onto the (optional) UPC field — still "Next", still hasn't submitted.
   await page.keyboard.press('ArrowDown');
-  await expect(page.locator('#input-new-food-photo')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#input-new-food-upc')).toHaveAttribute('nav-selected', 'true');
   await expect(page.locator('#sk-center')).toHaveText('Next');
   await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
 

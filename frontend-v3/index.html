@@ -92,8 +92,28 @@
         <span class="auth-dot" aria-hidden="true"></span>
       </div>
       <div class="panel-content">
-        <input id="input-search" class="search-input" type="text" placeholder="Search foods…" nav-selectable="true">
+        <div class="search-input-wrap">
+          <input id="input-search" class="search-input" type="text" placeholder="Search by name or UPC" nav-selectable="true">
+          <button id="btn-scan-upc" class="header-action-btn" type="button" nav-selectable="true" aria-label="Scan barcode">📷</button>
+        </div>
         <ul id="search-ul" class="item-list"></ul>
+      </div>
+    </div>
+
+    <!-- Panel: Scan Barcode — reached only from Search's scan button (see
+         css/header.css's >240px gating on .header-action-btn); a successful
+         decode feeds straight back into the same UPC search logic Search's
+         own digit-typing path uses. -->
+    <div id="panel-scan" class="panel" active="false">
+      <div class="header">
+        <h1>Scan Barcode</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <video id="scan-video" class="scan-video" autoplay muted playsinline></video>
+        <p id="scan-error" class="scan-error"></p>
+        <button id="btn-scan-cancel" class="secondary-button" type="button" nav-selectable="true">Cancel</button>
       </div>
     </div>
 
@@ -183,18 +203,18 @@
 
         <button id="btn-new-food-submit" class="submit-button" type="button" nav-selectable="true">Submit</button>
 
-        <!-- Advanced/optional — extra servings and a nutrition-facts photo.
-             Deliberately placed after Submit, not before: screen space is
-             scarce and the default path for most people is just Submit,
-             not filling in more detail than a basic entry needs. -->
+        <!-- Advanced/optional — extra servings and a UPC. Deliberately placed
+             after Submit, not before: screen space is scarce and the default
+             path for most people is just Submit, not filling in more detail
+             than a basic entry needs. -->
         <div id="extra-servings-container"></div>
 
         <p class="optional-label">(optional)</p>
         <button id="btn-add-extra-serving" class="secondary-button" type="button" nav-selectable="true">Add additional serving</button>
 
-        <div class="file-field">
-          <label for="input-new-food-photo">Nutrition facts photo</label>
-          <input id="input-new-food-photo" type="file" accept="image/*" nav-selectable="true">
+        <div class="input-wrap">
+          <input id="input-new-food-upc" type="text" inputmode="numeric" placeholder=" " nav-selectable="true">
+          <label for="input-new-food-upc">UPC (optional)</label>
         </div>
 
         <!-- Same action as the Submit button above — repeated here so
@@ -226,6 +246,32 @@
           <input id="input-recipe-servings-count" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
           <label for="input-recipe-servings-count">Servings (this recipe makes)</label>
         </div>
+
+        <p class="hint">Per serving</p>
+        <div class="summary-table" id="recipe-summary">
+          <div class="summary-row">
+            <span class="summary-label">Calories</span>
+            <span class="summary-value"><span id="recipe-calories">0</span></span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Fat</span>
+            <span class="summary-value"><span id="recipe-fat">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Carbs</span>
+            <span class="summary-value"><span id="recipe-carbohydrates">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Protein</span>
+            <span class="summary-value"><span id="recipe-protein">0</span> g</span>
+          </div>
+          <div class="summary-row" id="row-recipe-caffeine">
+            <span class="summary-label">Caffeine</span>
+            <span class="summary-value"><span id="recipe-caffeine">0</span> mg</span>
+          </div>
+        </div>
+
+        <div class="nutrient-table" id="recipe-nutrients"></div>
 
         <button id="btn-recipe-submit" class="submit-button" type="button" nav-selectable="true">Save Recipe</button>
       </div>
@@ -285,12 +331,6 @@
           <li class="options-row" id="opt-sync-error-row" nav-selectable="false" style="display:none;">
             <span class="options-label">Last Sync Error</span>
             <span class="options-value" id="opt-sync-error-value"></span>
-          </li>
-          <li class="options-row" id="opt-check-headers" nav-selectable="true">
-            <span class="options-label">Debug: Check Headers (fetch)</span>
-          </li>
-          <li class="options-row" id="opt-check-headers-xhr" nav-selectable="true">
-            <span class="options-label">Debug: Check Headers (XHR)</span>
           </li>
           <li class="options-row options-row-danger" id="opt-clear-db" nav-selectable="true">
             <span class="options-label">Clear Local DB</span>
@@ -381,6 +421,7 @@
     </div>
 
   </div>
+  <script src="js/vendor/zxing.min.js"></script>
   <script src="app.js?v=3.0.9"></script>
 </body>
 </html>

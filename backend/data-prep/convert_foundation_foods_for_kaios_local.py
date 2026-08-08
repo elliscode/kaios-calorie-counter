@@ -83,6 +83,20 @@ macros_fallback = {
     'Energy (Atwater General Factors)': 'calories',
 }
 
+# USDA reports "Energy" twice per food — once in kcal, once in kJ — as two
+# separate foodNutrients entries with the *same* nutrient name, distinguished
+# only by unitName. Matching on name alone (as this script used to) silently
+# takes whichever one comes later in the array, which is sometimes the kJ
+# entry — e.g. Foundation Foods fdcId 328637 "Cheese, cheddar" reports
+# "Energy = 408 kcal" then "Energy = 1710.0 kJ" right after it, so the old
+# code overwrote the correct 408 with 1710.0 and called it kcal. Only fat/
+# protein/carbs/caffeine/alcohol map to a single unambiguous unit (always
+# grams or mg), so this check only needs to apply to the calories mapping.
+def is_usable_macro_value(mapped_key, nutrient):
+    if mapped_key != 'calories':
+        return True
+    return (nutrient['nutrient'].get('unitName') or '').strip().lower() == 'kcal'
+
 apostrophe_s = re.compile(r"'S")
 whitespace = re.compile(r"\s+")
 acai_berry = re.compile(r"AA BERRY", re.IGNORECASE)
@@ -207,11 +221,13 @@ with open("../data/FoodData_Central_foundation_food_json_2026-04-30.json", 'r') 
 
         serving_100g = {'name': 'g', 'quantity': 100.0}
         for nutrient in item.get('foodNutrients') or []:
-            if nutrient['nutrient']['name'] in macros.keys():
-                serving_100g[macros[nutrient['nutrient']['name']]] = nutrient['amount']
+            name = nutrient['nutrient']['name']
+            if name in macros.keys() and is_usable_macro_value(macros[name], nutrient):
+                serving_100g[macros[name]] = nutrient['amount']
         for nutrient in item.get('foodNutrients') or []:
             name = nutrient['nutrient']['name']
-            if name in macros_fallback.keys() and macros_fallback[name] not in serving_100g:
+            if (name in macros_fallback.keys() and macros_fallback[name] not in serving_100g
+                    and is_usable_macro_value(macros_fallback[name], nutrient)):
                 serving_100g[macros_fallback[name]] = nutrient['amount']
 
         servings = []

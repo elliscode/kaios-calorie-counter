@@ -16,15 +16,6 @@ from .logger import log
 
 DOMAIN_NAMES = os.environ.get("DOMAIN_NAMES", "").split(",")
 TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME")
-PHOTOS_BUCKET_NAME = os.environ.get("PHOTOS_BUCKET_NAME")
-# A dedicated IAM identity's static credentials, used only to sign presigned
-# S3 POST/GET URLs (see get_presigned_s3_client / calorie_api/presigned.py) —
-# deliberately NOT the Lambda's own execution role, so a presigned URL's
-# permissions are scoped to exactly what this identity can do, independent of
-# whatever the Lambda itself is allowed to do. Shared across the user's other
-# "dumbphone apps" projects — this project's bucket is just added to it.
-PRESIGNED_AWS_ACCESS_KEY_ID = os.environ.get("PRESIGNED_AWS_ACCESS_KEY_ID")
-PRESIGNED_AWS_SECRET_ACCESS_KEY = os.environ.get("PRESIGNED_AWS_SECRET_ACCESS_KEY")
 # Admin moderation login (see login_route/otp_route) — a single hardcoded
 # phone number, not a general user system, since there's only ever one
 # legitimate admin. SMS is sent through an already-deployed, project-agnostic
@@ -67,14 +58,6 @@ GUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 dynamo = boto3.client("dynamodb")
 sqs = boto3.client("sqs")
 ses = boto3.client("ses", region_name=SES_REGION)
-
-
-def get_presigned_s3_client():
-    return boto3.client(
-        "s3",
-        aws_access_key_id=PRESIGNED_AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=PRESIGNED_AWS_SECRET_ACCESS_KEY,
-    )
 
 
 def has_invalid_domain(event):
@@ -699,5 +682,30 @@ def authenticate_user(func):
             delete_user_token(token_data["key2"])
             return format_response(event=event, http_code=403, body="Your CSRF token is invalid, please log in again")
         return func(event, token_data["user_id"], body)
+
+    return wrapper_func
+
+
+# Same session/CSRF validation as authenticate_user, but a missing or invalid
+# session just means user_id=None rather than a 403 — for routes that work
+# fine anonymously (see submit_food_route) but still attach the submission
+# to an account when a valid one is present, e.g. to dual-write into that
+# user's own synced foods. Never deletes/invalidates a token on a bad CSRF
+# here (unlike authenticate_user) — a route that tolerates no session at all
+# shouldn't punish a merely-stale one either, since there's nothing gated
+# behind it to protect.
+def optionally_authenticate_user(func):
+    def wrapper_func(*args, **kwargs):
+        event = args[0]
+        cookie = find_user_cookie(get_cookies(event))
+        body = parse_body(event.get("body"))
+        csrf_token = body.get("csrf")
+        token_data = get_user_token(cookie) if cookie else None
+        user_id = None
+        if token_data and token_data["expiration"] >= int(time.time()):
+            active_tokens = get_user_active_tokens(token_data["user_id"])
+            if token_data["key2"] in active_tokens["tokens"] and csrf_token == token_data["csrf"]:
+                user_id = token_data["user_id"]
+        return func(event, user_id, body)
 
     return wrapper_func

@@ -121,19 +121,6 @@
     flex-direction: column;
     gap: 10px;
   }
-  .card img {
-    width: 100%;
-    border-radius: 6px;
-    display: block;
-    object-fit: cover;
-    max-height: 320px;
-    cursor: pointer;
-  }
-  .card img:fullscreen {
-    object-fit: contain;
-    max-height: none;
-    background: #000;
-  }
   .card-fields {
     display: flex;
     flex-direction: column;
@@ -242,21 +229,6 @@
   .expiration-field .field-value.expired { color: #c0392b; }
 
   #empty-state { color: #666; font-size: 14px; }
-
-  /* Desktop: photo on the left, fields stacked on the right */
-  @media (min-width: 700px) {
-    .card {
-      flex-direction: row;
-      align-items: flex-start;
-    }
-    .card-photo {
-      flex: 0 0 260px;
-    }
-    .card img { max-height: 260px; }
-    .card-fields {
-      flex: 1;
-    }
-  }
 </style>
 </head>
 <body>
@@ -705,9 +677,9 @@ function sortByExpiration(items) {
 }
 
 // entry.expiration is the DynamoDB TTL attribute (unix seconds) set at
-// submission time and never extended by review/approval — the record (and
-// its photo, via the matching S3 lifecycle rule) is deleted on this same
-// schedule no matter what state it's in, so every card shows it.
+// submission time and never extended by review/approval — the record is
+// deleted on this same schedule no matter what state it's in, so every card
+// shows it.
 function formatTimeRemaining(expirationUnixSeconds) {
   if (!expirationUnixSeconds) return { text: 'Unknown', urgency: '' };
   const secondsLeft = expirationUnixSeconds - Date.now() / 1000;
@@ -738,26 +710,13 @@ function appendExpirationInfo(container, entry) {
   container.appendChild(row);
 }
 
-function appendPhotoIfPresent(card, entry) {
-  if (!entry.photoKey) return;
-  const photoWrap = document.createElement('div');
-  photoWrap.className = 'card-photo';
-  const img = document.createElement('img');
-  img.alt = entry.name;
-  img.title = 'Click to view fullscreen';
-  img.addEventListener('click', function () { openImageFullscreen(img); });
-  photoWrap.appendChild(img);
-  card.appendChild(photoWrap);
-  loadPhotoUrl(entry.photoKey, img);
-}
-
 function buildCard(entry) {
   const card = document.createElement('div');
   card.className = 'card';
-  appendPhotoIfPresent(card, entry);
 
   const fields = document.createElement('div');
   fields.className = 'card-fields';
+  makeReadOnlyField(fields, 'ID', entry.key2);
   const nameInput = makeField(fields, 'name', 'Name', entry.name);
 
   const servingsContainer = document.createElement('div');
@@ -790,8 +749,8 @@ function buildCard(entry) {
   acceptBtn.className = 'accept';
   acceptBtn.addEventListener('click', function () {
     // Merge the (possibly-edited) field values onto the original entry --
-    // carries photoKey/expiration/etc along too, so the card that moves into
-    // the approved section below is built from this alone, no re-fetch.
+    // carries expiration/etc along too, so the card that moves into the
+    // approved section below is built from this alone, no re-fetch.
     const updatedEntry = Object.assign({}, entry, {
       name: nameInput.value,
       servings: collectServings(servingsContainer)
@@ -844,10 +803,10 @@ function buildReadOnlyCard(entry, prepend) {
 function renderApprovedReadOnly(card, entry) {
   card.innerHTML = '';
   card.className = 'card readonly';
-  appendPhotoIfPresent(card, entry);
 
   const fields = document.createElement('div');
   fields.className = 'card-fields';
+  makeReadOnlyField(fields, 'ID', entry.key2);
   makeReadOnlyField(fields, 'Name', entry.name);
 
   const servingsList = document.createElement('div');
@@ -878,10 +837,10 @@ function renderApprovedReadOnly(card, entry) {
 function renderApprovedEditable(card, entry) {
   card.innerHTML = '';
   card.className = 'card readonly';
-  appendPhotoIfPresent(card, entry);
 
   const fields = document.createElement('div');
   fields.className = 'card-fields';
+  makeReadOnlyField(fields, 'ID', entry.key2);
   const nameInput = makeField(fields, 'name', 'Name', entry.name);
 
   const servingsContainer = document.createElement('div');
@@ -963,26 +922,6 @@ async function saveApprovedEdits(id, updatedEntry) {
   } catch {}
   displayError('Error saving changes, please try again.');
   return false;
-}
-
-function openImageFullscreen(imgEl) {
-  const request = imgEl.requestFullscreen || imgEl.webkitRequestFullscreen;
-  if (request) request.call(imgEl);
-}
-
-async function loadPhotoUrl(photoKey, imgEl) {
-  try {
-    const response = await fetch(`${BASE_URL}/presigned-get`, {
-      method: 'POST',
-      credentials: 'include',
-      body: JSON.stringify({ csrf: csrfToken, photoKey: photoKey })
-    });
-    if (response.status < 200 || response.status >= 300) return;
-    const data = await response.json();
-    imgEl.src = data.url;
-  } catch {
-    // Non-fatal — the rest of the card (fields/actions) still works without a photo.
-  }
 }
 
 // updatedEntry is the full (possibly-edited) record on Accept, or null on
@@ -1539,7 +1478,7 @@ function renderEditFoodResults(resultsList, query) {
   const q = query.trim().toLowerCase();
   if (!q) return;
 
-  const matches = searchableFoods().filter(function (food) {
+  const matches = searchableFoods().filter((food)=>!!food.name).filter(function (food) {
     return food.name.toLowerCase().indexOf(q) !== -1;
   }).slice(0, 20);
 

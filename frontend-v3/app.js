@@ -3,7 +3,7 @@
 var DATA_HOST = 'https://calories.elliscode.com';
 var API_HOST = 'https://api.calories.elliscode.com';
 var SUBMIT_URL = API_HOST + '/submit';
-var PRESIGNED_POST_URL = API_HOST + '/presigned-post';
+var LOOKUP_UPC_URL = API_HOST + '/lookup-upc';
 var ACCOUNT_OTP_URL = API_HOST + '/account/otp';
 var ACCOUNT_LOGIN_URL = API_HOST + '/account/login';
 var ACCOUNT_LOG_OUT_ALL_URL = API_HOST + '/account/log-out-all';
@@ -143,8 +143,10 @@ function applyCaffeineVisibility() {
   var display = getShowCaffeine() ? '' : 'none';
   var rowSum = document.getElementById('row-sum-caffeine');
   var rowServ = document.getElementById('row-serv-caffeine');
+  var rowRecipe = document.getElementById('row-recipe-caffeine');
   if (rowSum) rowSum.style.display = display;
   if (rowServ) rowServ.style.display = display;
+  if (rowRecipe) rowRecipe.style.display = display;
 }
 
 // ─── Account session (email OTP login) ─────────────────────────────────────
@@ -213,7 +215,7 @@ function showStatus(msg, isError) {
 
 var db = null;
 var DB_NAME = 'kaios-calorie-counter';
-var DB_VERSION = 5;
+var DB_VERSION = 6;
 
 function openDB(callback) {
   var req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -295,6 +297,13 @@ function openDB(callback) {
       mySubmissionsStore = tx.objectStore('mySubmissions');
     }
 
+    // v6: local UPC-mapping lookup (upc -> {upc, foodId, servingName,
+    // servingQuantity}), synced via manifest.json like `foods` — see
+    // dbGetUpcMapping/dbBulkPutUpcMappings and syncData's per-file dispatch.
+    if (!d.objectStoreNames.contains('upcMappings')) {
+      d.createObjectStore('upcMappings', { keyPath: 'upc' });
+    }
+
     if (e.oldVersion < 4) {
       // Backfill `foods` with the fields sync/status computation now needs.
       // Pre-v4 records have no way to tell "I created this locally" apart
@@ -362,6 +371,11 @@ function openDB(callback) {
       // documentation of the v5 shape change, mirroring every prior
       // version's block.
     }
+
+    if (e.oldVersion < 6) {
+      // v6: upcMappings, created above. Nothing to backfill — it's a wholly
+      // new, empty store until the next manifest sync populates it.
+    }
   };
   req.onsuccess = function (e) {
     db = e.target.result;
@@ -406,6 +420,23 @@ function dbGetAllFoods(callback) {
 function dbGetFood(id, callback) {
   var tx = db.transaction('foods', 'readonly');
   var req = tx.objectStore('foods').get(id);
+  req.onsuccess = function () { callback(req.result || null); };
+  req.onerror = function () { callback(null); };
+}
+
+// Mirrors dbBulkPutFoods/dbGetFood exactly, for the separate upcMappings
+// store — see syncData's per-file dispatch for how these get populated.
+function dbBulkPutUpcMappings(mappingsArray, callback) {
+  var tx = db.transaction('upcMappings', 'readwrite');
+  var store = tx.objectStore('upcMappings');
+  mappingsArray.forEach(function (m) { store.put(m); });
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+function dbGetUpcMapping(upc, callback) {
+  var tx = db.transaction('upcMappings', 'readonly');
+  var req = tx.objectStore('upcMappings').get(upc);
   req.onsuccess = function () { callback(req.result || null); };
   req.onerror = function () { callback(null); };
 }
@@ -598,8 +629,8 @@ function describeFetchError(err) {
   return (err && err.message) ? err.message : String(err);
 }
 
-// Uses XMLHttpRequest rather than fetch() — confirmed via the Options > Debug
-// button that this device's Gecko 84 build silently omits the Origin header
+// Uses XMLHttpRequest rather than fetch() — confirmed on real KaiOS 3.0
+// hardware that this device's Gecko 84 build silently omits the Origin header
 // on fetch() GETs specifically (it sends it fine on fetch() POSTs), which
 // breaks CORS for every GET this app makes to the data CDN with no visible
 // error beyond a generic "NetworkError". XHR predates fetch() by years in
@@ -735,14 +766,23 @@ function syncData(onFileStart, onFileProgress, callback, force) {
           var fileEntry = toFetch[i];
           onFileStart(i + 1, toFetch.length, fileEntry);
           xhrGetJson(DATA_HOST + fileEntry.url, onFileProgress)
-            .then(function (foodsArr) {
+            .then(function (items) {
+              // upc-mappings files store {upc, foodId, servingName,
+              // servingQuantity} rows as-is — no food-record tagging to do,
+              // unlike the 'foods' branch below.
+              if (fileEntry.type === 'upc-mappings') {
+                dbBulkPutUpcMappings(items, function () {
+                  dbMarkFileSynced(fileEntry.id, function () { fetchNext(i + 1); });
+                });
+                return;
+              }
               // Tagged as 'catalog' here — this is the one place a food ever
               // becomes an "Approved" My Foods entry (see
               // computeMyFoodStatus), since a user-submitted food only ever
               // reaches this path once it's been approved+exported and
               // shows up in a downloaded manifest data file under its
               // original id.
-              var tagged = foodsArr.map(function (f) {
+              var tagged = items.map(function (f) {
                 f.source = 'catalog';
                 f.updated = nowSec();
                 f.deleted = false;
@@ -1149,6 +1189,8 @@ function updateSoftkeysForFocus() {
   } else if (panel.id === 'panel-guesstimate') {
     var onGuessSubmit = focused() && focused().id === 'btn-guesstimate-submit';
     setSoftkeys('Back', onGuessSubmit ? 'Add' : 'Next', '');
+  } else if (panel.id === 'panel-scan') {
+    setSoftkeys('Cancel', '', '');
   } else if (panel.id === 'panel-options') {
     setSoftkeys('Back', 'SELECT', '');
   } else if (panel.id === 'panel-login-email') {
@@ -1168,13 +1210,23 @@ function activePanel() {
   return document.querySelector('.panel[active="true"]');
 }
 
+// offsetParent is null for anything with display:none (itself or an
+// ancestor) — cheap, standard "is this actually rendered" check. Needed
+// since #btn-scan-upc (see css/header.css's >240px .header-action-btn
+// gating) is the first nav-selectable element in the app that's ever
+// conditionally hidden like this; every other one is always visible
+// whenever its panel is active, so this doesn't change their behavior.
+function isVisible(el) {
+  return el.offsetParent !== null;
+}
+
 function selectables() {
   if (isSheetOpen()) {
-    return Array.prototype.slice.call(document.querySelectorAll('#sheet [nav-selectable="true"]'));
+    return Array.prototype.slice.call(document.querySelectorAll('#sheet [nav-selectable="true"]')).filter(isVisible);
   }
   var panel = activePanel();
   if (!panel) return [];
-  return Array.prototype.slice.call(panel.querySelectorAll('[nav-selectable="true"]'));
+  return Array.prototype.slice.call(panel.querySelectorAll('[nav-selectable="true"]')).filter(isVisible);
 }
 
 function focused() {
@@ -1436,6 +1488,8 @@ function handleSoftLeft() {
     else returnToSearchPanel();
   } else if (panel.id === 'panel-guesstimate') {
     returnToSearchPanel();
+  } else if (panel.id === 'panel-scan') {
+    closeScanPanel();
   } else if (panel.id === 'panel-options') {
     showDiaryPanel();
   } else if (panel.id === 'panel-login-email') {
@@ -1654,11 +1708,18 @@ function renderSearchResults(query) {
   // ingredient — a guesstimate has no food record to pick as an ingredient,
   // and nesting the recipe builder inside itself isn't supported.
   if (!pickingIngredient) {
+    // A 12-14 digit query is never going to substring-match a food name, so
+    // this UPC carried through to a blank "+ Add new food" doesn't collide
+    // with anything above — it's just extra context, not the food's name.
+    var upcQuery = /^\d{12,14}$/.test(query.trim()) ? query.trim() : null;
+
     var addNew = document.createElement('li');
     addNew.className = 'search-row add-new';
     addNew.setAttribute('nav-selectable', 'true');
     addNew.textContent = '+ Add new food';
-    addNew.addEventListener('click', function () { showNewFoodPanel(query.trim()); });
+    addNew.addEventListener('click', function () {
+      showNewFoodPanel(upcQuery ? { name: '', upc: upcQuery } : query.trim());
+    });
     ul.appendChild(addNew);
 
     var addRecipe = document.createElement('li');
@@ -1674,8 +1735,145 @@ function renderSearchResults(query) {
     addGuess.textContent = '+ Add guesstimate';
     addGuess.addEventListener('click', function () { showGuesstimatePanel(query.trim()); });
     ul.appendChild(addGuess);
+
+    // UPC lookup is async (IndexedDB, then maybe a network call) — it
+    // inserts its own row(s) at the very top of #search-ul once it
+    // resolves, on top of everything rendered synchronously above.
+    if (upcQuery) renderUpcSearchResult(upcQuery);
   }
 }
+
+// Local UPC-mapping lookup first (no network call at all — per spec,
+// "nothing will happen on the backend" for an already-known mapping), the
+// remote product database only if that misses. Both branches guard against
+// a stale response landing after the user's kept typing by re-checking the
+// search input's current value before touching the DOM.
+function renderUpcSearchResult(upc) {
+  dbGetUpcMapping(upc, function (mapping) {
+    if (document.getElementById('input-search').value.trim() !== upc) return;
+
+    var food = mapping ? state.foodsById[mapping.foodId] : null;
+    if (mapping && food) {
+      insertUpcResultRow(food.name + ' — ' + formatQty(mapping.servingQuantity) + ' ' + mapping.servingName, function () {
+        commitUpcMappedFoodToDiary(food, mapping.servingName, mapping.servingQuantity);
+      });
+      return;
+    }
+
+    // No local mapping — or one exists but points at a food that hasn't
+    // synced locally yet (rare: mapping and catalog files synced at
+    // different times). Either way, fall through to the remote lookup
+    // rather than dead-end.
+    xhrPostJson(LOOKUP_UPC_URL, { upc: upc }).then(function (res) {
+      if (document.getElementById('input-search').value.trim() !== upc) return;
+      if (res.status !== 200 || !res.data) return; // 404/error — the standard "+ Add new food" row already covers it
+      var lookupFood = res.data;
+
+      var useRow = insertUpcResultRow(lookupFood.name, function () {
+        autoCreateFoodFromUpcLookup(upc, lookupFood);
+      });
+
+      var createLi = document.createElement('li');
+      createLi.className = 'search-row add-new';
+      createLi.setAttribute('nav-selectable', 'true');
+      createLi.textContent = '+ Create new food using this UPC';
+      createLi.addEventListener('click', function () {
+        showNewFoodPanel({ name: lookupFood.name, upc: upc, servings: lookupFood.servings });
+      });
+      useRow.insertAdjacentElement('afterend', createLi);
+    }).catch(function () {
+      // Network hiccup — non-fatal, just no UPC-specific rows this time.
+    });
+  });
+}
+
+// Prepended to #search-ul (ahead of the name-search results and CTA rows
+// already rendered synchronously) — returns the new <li> so callers can
+// position anything else relative to it. Reuses .recipe-tag's badge look
+// for a "UPC" tag; the label carries the food name (+ resolved serving,
+// when known from a local mapping — a raw remote lookup only ever has the
+// name, no chosen serving yet).
+function insertUpcResultRow(label, onClick) {
+  var ul = document.getElementById('search-ul');
+  var li = document.createElement('li');
+  li.className = 'search-row';
+  li.setAttribute('nav-selectable', 'true');
+  var nameSpan = document.createElement('span');
+  nameSpan.textContent = label;
+  var tag = document.createElement('span');
+  tag.className = 'recipe-tag';
+  tag.textContent = 'UPC';
+  li.appendChild(nameSpan);
+  li.appendChild(tag);
+  li.addEventListener('click', onClick);
+  ul.insertBefore(li, ul.firstChild);
+  return li;
+}
+
+// ─── Barcode scanning (Search panel's scan button) ─────────────────────────
+//
+// Uses the same vendored ZXing build as s3/admin.html/s3/barcode-test.html
+// (js/vendor/zxing.min.js), hinted to the same barcode symbologies actual
+// grocery products use. Unproven on real KaiOS Gecko hardware — admin.html's
+// own camera code deliberately targets modern browsers only (see xhrGetJson's
+// comment above on Gecko 84's fetch()/Origin-header bug) — so this fails to
+// a visible on-screen error rather than a silent dead button if getUserMedia
+// or ZXing itself isn't available.
+var scanCodeReader = null;
+
+function getScanCodeReader() {
+  if (scanCodeReader) return scanCodeReader;
+  var hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+    ZXing.BarcodeFormat.UPC_A,
+    ZXing.BarcodeFormat.UPC_E,
+    ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.EAN_8
+  ]);
+  scanCodeReader = new ZXing.BrowserMultiFormatReader(hints);
+  return scanCodeReader;
+}
+
+function showScanPanel() {
+  document.getElementById('scan-error').textContent = '';
+  showPanel('panel-scan');
+
+  if (typeof ZXing === 'undefined') {
+    document.getElementById('scan-error').textContent = 'Barcode scanning is not available on this device.';
+    return;
+  }
+
+  var reader = getScanCodeReader();
+  reader.decodeFromConstraints(
+    { audio: false, video: { facingMode: { ideal: 'environment' } } },
+    document.getElementById('scan-video'),
+    function (result, err) {
+      if (result) {
+        var scannedCode = result.getText();
+        closeScanPanel();
+        document.getElementById('input-search').value = scannedCode;
+        renderSearchResults(scannedCode);
+        return;
+      }
+      // NotFoundException just means no barcode was in this particular
+      // frame — expected on nearly every frame while aiming the camera,
+      // not a real error.
+      if (err && !(err instanceof ZXing.NotFoundException)) {
+        document.getElementById('scan-error').textContent = 'Scan error: ' + err.message;
+      }
+    }
+  ).catch(function (err) {
+    document.getElementById('scan-error').textContent = 'Could not access camera: ' + err.message;
+  });
+}
+
+function closeScanPanel() {
+  if (scanCodeReader) scanCodeReader.reset();
+  returnToSearchPanel();
+}
+
+document.getElementById('btn-scan-upc').addEventListener('click', showScanPanel);
+document.getElementById('btn-scan-cancel').addEventListener('click', closeScanPanel);
 
 function trayHasFood(id) {
   return state.tray.some(function (f) { return f.id === id; });
@@ -1740,6 +1938,78 @@ function commitFoodAndTray(food) {
         showStatus('Added ' + items.length + (items.length === 1 ? ' item' : ' items'), false);
         syncAfterDiaryMutation();
       }
+    });
+  });
+}
+
+// Same as addFoodToDiaryDefault, but for a specific, already-known serving
+// (resolved from a UPC mapping) rather than deriving one via
+// defaultServingForFood — falls back to the food's first serving if the
+// named one can't be found (shouldn't normally happen, but a serving
+// getting renamed after a mapping was created is possible).
+function addFoodToDiaryWithServing(food, servingName, quantity, callback) {
+  var serving = food.servings.filter(function (s) { return s.name === servingName; })[0] || food.servings[0];
+  var entry = buildDiaryEntry(food, serving, quantity);
+  dbAddDiaryEntry(entry, function (newId) {
+    state.usageCounts[food.id] = (state.usageCounts[food.id] || 0) + 1;
+    dbIncrementUsageCount(food.id, function () {
+      rememberServing(food.id, serving.name, quantity, function () {
+        if (callback) callback(newId);
+      });
+    });
+  });
+}
+
+// The "already locally mapped" path from the Search panel's UPC lookup —
+// unlike commitFoodAndTray, this bypasses the tray entirely and adds
+// exactly one food+serving immediately, since a UPC search hit is a single,
+// already-resolved pick rather than part of a multi-item tray session.
+function commitUpcMappedFoodToDiary(food, servingName, quantity) {
+  addFoodToDiaryWithServing(food, servingName, quantity, function () {
+    showDiaryPanel();
+    showStatus('Added ' + food.name, false);
+    syncAfterDiaryMutation();
+  });
+}
+
+// Behind-the-scenes equivalent of "Create new food using this UPC" (the New
+// Food panel path) — used when a remote UPC lookup result is tapped
+// directly instead of reviewed first. Trusts the looked-up servings as-is;
+// the resulting submission still goes through the same admin review queue
+// as any other (see postSubmitJson's upc param), so bad data never reaches
+// the shared catalog unreviewed even though it's usable in this diary
+// immediately. Always includes the upc (unlike submitNewFood, where it's
+// only sent if the user typed one in) — that's the whole point of this path.
+function autoCreateFoodFromUpcLookup(upc, lookupFood) {
+  if (!lookupFood.servings || !lookupFood.servings.length) {
+    showStatus('That UPC has no usable serving data', true);
+    return;
+  }
+
+  var id = generateGuid();
+  var food = {
+    id: id,
+    name: lookupFood.name,
+    servings: lookupFood.servings,
+    source: 'local',
+    updated: nowSec(),
+    deleted: false
+  };
+
+  dbBulkPutFoods([food], function () {
+    state.allFoods.push(food);
+    state.foodsById[food.id] = food;
+    // My Foods must show every locally-created food regardless of login
+    // state. Submission itself is anonymous-friendly too, same as
+    // submitNewFood — see its own comment for why.
+    dbPutMySubmission({ id: id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
+      var primary = food.servings[0];
+      addFoodToDiaryWithServing(food, primary.name, primary.quantity, function () {
+        submitNewFoodToApi(id, food.name, food.servings, upc);
+        showDiaryPanel();
+        showStatus('Added ' + food.name, false);
+        syncAfterDiaryMutation();
+      });
     });
   });
 }
@@ -1859,11 +2129,15 @@ function renderServingsPreview() {
     var el = document.getElementById('serv-' + k);
     if (el) el.textContent = Math.round(values[k] || 0);
   });
-  renderServingsNutrients(values);
+  renderNutrientTable('servings-nutrients', values);
 }
 
-function renderServingsNutrients(values) {
-  var container = document.getElementById('servings-nutrients');
+// Shared by the Servings panel and the Recipe Builder's live preview — any
+// key on `values` that isn't one of the summary numbers (calories/fat/
+// carbs/protein/caffeine, shown separately) or a non-nutrient bookkeeping
+// field (id/date/foodId/etc.) gets its own row here.
+function renderNutrientTable(containerId, values) {
+  var container = document.getElementById(containerId);
   container.innerHTML = '';
   Object.keys(values).forEach(function (key) {
     if (NON_NUTRIENT_KEYS.indexOf(key) !== -1) return;
@@ -2038,7 +2312,7 @@ var NEW_FOOD_NUMERIC_FIELDS = [
 
 // Two Submit buttons exist on this panel — one right after Protein (the
 // fast path for a basic entry), one at the very bottom after the optional
-// extra-servings/photo section (so scrolling down into that doesn't mean
+// extra-servings/UPC section (so scrolling down into that doesn't mean
 // scrolling all the way back up just to submit). Both do the exact same
 // thing, so anywhere the code needs to know "is focus on Submit", it needs
 // to check both ids.
@@ -2057,9 +2331,6 @@ function newFoodCenterAction() {
   if (isNewFoodSubmitBtn(el)) {
     submitNewFood();
   } else if (el && !isTextInput(el)) {
-    // e.g. the photo file input — center should open its native picker,
-    // same as Enter already does for non-text-input elements everywhere
-    // else in the app, not advance past it.
     interact(el);
   } else {
     moveFocus('down');
@@ -2226,17 +2497,37 @@ function collectExtraServings() {
   return result;
 }
 
-function showNewFoodPanel(prefillName) {
-  document.getElementById('input-new-food-name').value = prefillName || '';
-  document.getElementById('input-new-food-serving-qty').value = '';
-  document.getElementById('input-new-food-serving-name').value = '';
-  document.getElementById('input-new-food-calories').value = '';
-  document.getElementById('input-new-food-fat').value = '';
-  document.getElementById('input-new-food-carbs').value = '';
-  document.getElementById('input-new-food-protein').value = '';
-  document.getElementById('input-new-food-photo').value = '';
+// prefill is either a plain string (every pre-existing caller — just the
+// search query, to prefill Name) or a {name, upc, servings} object (a UPC
+// lookup result) — servings' first entry fills the primary serving fields,
+// any more become extra-serving blocks via the same addExtraServingBlock()
+// "+ Add additional serving" already builds, rather than a second copy of
+// that field-building logic.
+function showNewFoodPanel(prefill) {
+  var prefillObj = (prefill && typeof prefill === 'object') ? prefill : { name: prefill || '' };
+  var servings = prefillObj.servings || [];
+  var primary = servings[0] || {};
+
+  document.getElementById('input-new-food-name').value = prefillObj.name || '';
+  document.getElementById('input-new-food-serving-qty').value = primary.quantity != null ? formatQty(primary.quantity) : '';
+  document.getElementById('input-new-food-serving-name').value = primary.name || '';
+  document.getElementById('input-new-food-calories').value = primary.calories != null ? primary.calories : '';
+  document.getElementById('input-new-food-fat').value = primary.fat != null ? primary.fat : '';
+  document.getElementById('input-new-food-carbs').value = primary.carbohydrates != null ? primary.carbohydrates : '';
+  document.getElementById('input-new-food-protein').value = primary.protein != null ? primary.protein : '';
+  document.getElementById('input-new-food-upc').value = prefillObj.upc || '';
   document.getElementById('extra-servings-container').innerHTML = '';
   extraServingCount = 0;
+
+  servings.slice(1).forEach(function (serving) {
+    var block = addExtraServingBlock();
+    block.querySelector('.extra-serving-serving-qty').value = serving.quantity != null ? formatQty(serving.quantity) : '';
+    block.querySelector('.extra-serving-serving-name').value = serving.name || '';
+    block.querySelector('.extra-serving-calories').value = serving.calories != null ? serving.calories : '';
+    block.querySelector('.extra-serving-fat').value = serving.fat != null ? serving.fat : '';
+    block.querySelector('.extra-serving-carbs').value = serving.carbohydrates != null ? serving.carbohydrates : '';
+    block.querySelector('.extra-serving-protein').value = serving.protein != null ? serving.protein : '';
+  });
 
   // showPanel() focuses the first field and updateSoftkeysForFocus() sets
   // the correct label ("Next", not "Submit" — that only applies once focus
@@ -2252,8 +2543,7 @@ function submitNewFood() {
   var fat = parseFloat(document.getElementById('input-new-food-fat').value) || 0;
   var carbs = parseFloat(document.getElementById('input-new-food-carbs').value) || 0;
   var protein = parseFloat(document.getElementById('input-new-food-protein').value) || 0;
-  var photoInput = document.getElementById('input-new-food-photo');
-  var photo = photoInput.files && photoInput.files[0];
+  var upc = document.getElementById('input-new-food-upc').value.trim() || null;
 
   if (!name || !servingQty || !servingName || isNaN(calories)) {
     showStatus('Name, serving, and calories are required', true);
@@ -2285,11 +2575,13 @@ function submitNewFood() {
     state.foodsById[food.id] = food;
 
     // My Foods must show every locally-created food regardless of login
-    // state, so this bookkeeping row is created unconditionally — only the
-    // actual submission attempt below is gated on being logged in.
+    // state. Submission itself is anonymous-friendly too — admin review is
+    // the actual spam gate on the moderation queue, not login (see
+    // backend/README.md) — logging in just attaches it to an account for
+    // multi-device sync.
     dbPutMySubmission({ id: id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
       addFoodToDiaryDefault(food, function () {
-        if (isLoggedIn()) submitNewFoodToApi(id, name, food.servings, photo);
+        submitNewFoodToApi(id, name, food.servings, upc);
         showDiaryPanel();
         showStatus('Added ' + name, false);
       });
@@ -2297,52 +2589,18 @@ function submitNewFood() {
   });
 }
 
-// Maps a File's declared type (falling back to its name's extension) to one
-// of the extensions the backend's /presigned-post whitelists. Returns null
-// if it can't confidently tell — the caller then just skips the photo
-// rather than guessing.
-var PHOTO_MIME_TO_EXTENSION = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/gif': 'gif',
-  'image/webp': 'webp'
-};
-var PHOTO_ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
-
-function getPhotoExtension(file) {
-  if (file.type && PHOTO_MIME_TO_EXTENSION[file.type]) return PHOTO_MIME_TO_EXTENSION[file.type];
-  var match = /\.([a-zA-Z0-9]+)$/.exec(file.name || '');
-  if (match) {
-    var ext = match[1].toLowerCase();
-    if (ext === 'jpeg') return 'jpg';
-    if (PHOTO_ALLOWED_EXTENSIONS.indexOf(ext) !== -1) return ext;
-  }
-  return null;
-}
-
-// The photo bypasses this Lambda entirely — it's uploaded straight to S3 via
-// a presigned POST URL the API hands out, keyed by the food's own GUID (not
-// a separately-generated name), so the photo and its DynamoDB record always
-// address by the same id. Only once that upload has actually succeeded (or
-// immediately, if there's no photo) does /submit get called with the food's
-// fields as plain JSON. The whole chain stays best-effort/non-blocking
-// relative to the local add above — a failure at any step is just logged.
-// Both /presigned-post and /submit now require a logged-in session (a
-// deliberate spam gate — see the backend) — this function is only ever
-// called when isLoggedIn() is already true, but the calls themselves still
-// send `csrf` since that's what the server actually checks.
+// Submitting is best-effort/non-blocking relative to the local add above —
+// a failure here is just logged, never surfaced to the user, since the food
+// is already usable locally regardless. Anonymous-friendly: /submit doesn't
+// require login (admin review is the actual spam gate on the moderation
+// queue), so this runs unconditionally — getCsrf() is simply empty/absent
+// when logged out, and the backend treats that as an anonymous submission.
 //
 // Only a genuine 200 from /submit flips this food's My Foods status from
 // "Local" to "Approval Pending" — a timeout, 401/403, or any other failure
 // leaves it exactly as "Local", per spec.
-function submitNewFoodToApi(id, name, servings, photo) {
-  var extension = photo ? getPhotoExtension(photo) : null;
-  var uploadStep = (photo && extension) ? uploadPhotoViaPresignedPost(id, extension, photo) : Promise.resolve(null);
-
-  uploadStep
-    .then(function (photoKey) {
-      return postSubmitJson(id, name, servings, photoKey);
-    })
+function submitNewFoodToApi(id, name, servings, upc) {
+  postSubmitJson(id, name, servings, upc)
     .then(function (res) {
       if (res && res.status === 200) {
         dbGetMySubmission(id, function (existing) {
@@ -2358,34 +2616,17 @@ function submitNewFoodToApi(id, name, servings, photo) {
     });
 }
 
-function uploadPhotoViaPresignedPost(id, extension, photo) {
-  return xhrPostJson(PRESIGNED_POST_URL, { id: id, extension: extension, csrf: getCsrf() })
-    .then(function (res) {
-      if (res.status !== 200 || !res.data) throw new Error('Could not get a presigned upload URL (HTTP ' + res.status + ')');
-      var presigned = res.data;
-      var formData = new FormData();
-      Object.keys(presigned.fields).forEach(function (key) {
-        formData.append(key, presigned.fields[key]);
-      });
-      formData.append('file', photo); // must be appended last — S3's required presigned-POST form shape
-      // Different origin (S3, not our API) — no cookie/csrf involved, so
-      // this leg stays on fetch() rather than xhrPostJson.
-      return fetch(presigned.url, { method: 'POST', body: formData });
-    })
-    .then(function (uploadRes) {
-      if (!uploadRes.ok) throw new Error('Photo upload to S3 failed');
-      return id + '.' + extension;
-    });
-}
-
-function postSubmitJson(id, name, servings, photoKey) {
+function postSubmitJson(id, name, servings, upc) {
   var body = {
     id: id,
     name: name,
     servings: servings,
     csrf: getCsrf()
   };
-  if (photoKey) body.photoKey = photoKey;
+  // Backend creates a pending UPC mapping (to this food's id + its first
+  // serving) as a side effect when present — see backend/README.md's "UPC
+  // mappings" note. Never stored on the food record itself.
+  if (upc) body.upc = upc;
   return xhrPostJson(SUBMIT_URL, body);
 }
 
@@ -2499,6 +2740,41 @@ function resumeRecipeBuilderPanel() {
   setFocus(document.getElementById('btn-recipe-add-ingredient'));
 }
 
+// Scales an ingredient's backing serving by its own quantity — shared by
+// renderRecipeIngredientsList (per-row calories, matching how a Diary row
+// shows one) and computeRecipeTotals (recipe-wide sums for the live
+// preview and the actual baked-serving save), so the same food/serving/
+// scale lookup isn't repeated in three places. Returns null if the food or
+// that exact serving isn't found locally (e.g. it vanished since picked).
+function computeIngredientNutrients(ing) {
+  var food = state.foodsById[ing.foodId];
+  var serving = food && food.servings.filter(function (s) { return s.name === ing.servingName; })[0];
+  if (!serving) return null;
+  var scale = serving.quantity ? (ing.quantity / serving.quantity) : 0;
+  var values = {};
+  Object.keys(serving).forEach(function (key) {
+    if (key === 'name' || key === 'quantity') return;
+    values[key] = serving[key] * scale;
+  });
+  return values;
+}
+
+// Sums computeIngredientNutrients() across every ingredient — used both by
+// the live per-serving preview below and by submitRecipe() at actual save
+// time, so the preview always matches what gets baked/saved.
+function computeRecipeTotals(ingredients) {
+  var totals = {};
+  var skipped = 0;
+  ingredients.forEach(function (ing) {
+    var values = computeIngredientNutrients(ing);
+    if (!values) { skipped++; return; }
+    Object.keys(values).forEach(function (key) {
+      totals[key] = (totals[key] || 0) + values[key];
+    });
+  });
+  return { totals: totals, skipped: skipped };
+}
+
 function renderRecipeIngredientsList() {
   var ul = document.getElementById('recipe-ingredients-ul');
   ul.innerHTML = '';
@@ -2517,11 +2793,39 @@ function renderRecipeIngredientsList() {
     qty.className = 'food-row-serving';
     qty.textContent = formatQty(ing.quantity) + ' ' + ing.servingName;
 
+    var cal = document.createElement('span');
+    cal.className = 'food-row-calories';
+    var ingValues = computeIngredientNutrients(ing);
+    cal.textContent = Math.round((ingValues && ingValues.calories) || 0);
+
     li.appendChild(name);
     li.appendChild(qty);
+    li.appendChild(cal);
     li.addEventListener('click', function () { openIngredientActionsSheet(idx); });
     ul.appendChild(li);
   });
+  renderRecipePreview();
+}
+
+// Live "what one serving of this will contain" preview — same summary-
+// table + nutrient-table pattern as the Servings panel, kept in sync with
+// this same data on every ingredient add/remove and every keystroke in the
+// servings-count field (see its 'input' listener below). Deliberately
+// per-serving, not recipe-wide totals, since that's what actually gets
+// logged to the diary once saved — matches computeRecipeTotals()/
+// submitRecipe()'s own math exactly, so the preview never lies.
+function renderRecipePreview() {
+  var servingsCount = parseFloat(document.getElementById('input-recipe-servings-count').value) || 0;
+  var totals = computeRecipeTotals(state.recipeBuilder.ingredients).totals;
+  var values = {};
+  Object.keys(totals).forEach(function (key) {
+    values[key] = servingsCount ? totals[key] / servingsCount : 0;
+  });
+  SUMMARY_KEYS.forEach(function (k) {
+    var el = document.getElementById('recipe-' + k);
+    if (el) el.textContent = Math.round(values[k] || 0);
+  });
+  renderNutrientTable('recipe-nutrients', values);
 }
 
 // A destructive action (removing an ingredient) always requires this
@@ -2552,6 +2856,7 @@ document.getElementById('btn-recipe-add-ingredient').addEventListener('click', s
 wireAdvanceOnEnter(document.getElementById('input-recipe-name'), recipeBuilderCenterAction);
 wireNumericField(document.getElementById('input-recipe-servings-count'));
 wireAdvanceOnEnter(document.getElementById('input-recipe-servings-count'), recipeBuilderCenterAction);
+document.getElementById('input-recipe-servings-count').addEventListener('input', renderRecipePreview);
 document.getElementById('btn-recipe-submit').addEventListener('click', submitRecipe);
 
 function recipeBuilderCenterAction() {
@@ -2570,18 +2875,12 @@ function submitRecipe() {
   if (!ingredients.length) { showStatus('Add at least one ingredient', true); return; }
   if (!servingsCount || servingsCount <= 0) { showStatus('Enter how many servings this makes', true); return; }
 
-  var totals = {};
-  var skipped = 0;
-  ingredients.forEach(function (ing) {
-    var food = state.foodsById[ing.foodId];
-    var serving = food && food.servings.filter(function (s) { return s.name === ing.servingName; })[0];
-    if (!serving) { skipped++; return; } // food/serving vanished since it was picked — degrade gracefully, don't block saving the rest
-    var scale = serving.quantity ? (ing.quantity / serving.quantity) : 0;
-    Object.keys(serving).forEach(function (key) {
-      if (key === 'name' || key === 'quantity') return;
-      totals[key] = (totals[key] || 0) + serving[key] * scale;
-    });
-  });
+  // Same computation the live preview above already showed — degrades
+  // gracefully (skipped, not blocked) if a food/serving vanished locally
+  // since it was picked.
+  var recipeTotals = computeRecipeTotals(ingredients);
+  var totals = recipeTotals.totals;
+  var skipped = recipeTotals.skipped;
 
   var bakedServing = { name: 'serving', quantity: 1 };
   Object.keys(totals).forEach(function (key) { bakedServing[key] = round2(totals[key] / servingsCount); });
@@ -2824,49 +3123,6 @@ document.getElementById('opt-sync-error-row').addEventListener('click', function
   );
 });
 
-// Temporary diagnostic: hits the Lambda's throwaway /debug-headers GET route
-// (see backend/lambda/lambda_function.py) and shows back exactly what
-// headers this device's GET request actually arrived with — specifically
-// whether 'origin' is present. Confirmed via the fetch() variant that Gecko
-// 84 on real KaiOS 3.0 hardware omits Origin on fetch() GETs; the XHR variant
-// exists to check whether the older XMLHttpRequest API has the same gap.
-// Remove both once that's fully sorted out.
-function checkDebugHeaders(sendRequest) {
-  openSheet(
-    [{ label: 'Dismiss', action: function () { closeSheet(); } }],
-    { title: 'Checking…', note: 'Requesting ' + API_HOST + '/debug-headers' }
-  );
-  sendRequest()
-    .then(function (data) {
-      var headers = data.headers || {};
-      var hasOrigin = Object.prototype.hasOwnProperty.call(headers, 'origin');
-      var lines = 'origin present: ' + (hasOrigin ? ('yes (' + headers.origin + ')') : 'NO') + '\n\n' +
-        JSON.stringify(headers);
-      openSheet(
-        [{ label: 'Dismiss', action: function () { closeSheet(); } }],
-        { title: 'Request Headers', note: lines }
-      );
-    })
-    .catch(function (err) {
-      openSheet(
-        [{ label: 'Dismiss', action: function () { closeSheet(); } }],
-        { title: 'Request Headers', note: 'Request itself failed: ' + describeFetchError(err) }
-      );
-    });
-}
-
-document.getElementById('opt-check-headers').addEventListener('click', function () {
-  checkDebugHeaders(function () {
-    return fetch(API_HOST + '/debug-headers').then(function (res) { return res.json(); });
-  });
-});
-
-document.getElementById('opt-check-headers-xhr').addEventListener('click', function () {
-  checkDebugHeaders(function () {
-    return xhrGetJson(API_HOST + '/debug-headers');
-  });
-});
-
 function confirmClearLocalDb() {
   openSheet(
     [
@@ -3029,18 +3285,14 @@ function deleteMyFood(foodId) {
   }
 }
 
-// Only ever resends name/servings — the original nutrition-facts photo was
-// uploaded once at creation and was never persisted locally afterward, so a
-// re-submit can't re-attach one.
+// Only ever resends name/servings — a food's original UPC (if any) was
+// never persisted locally as part of the food record itself (see
+// backend/README.md's UPC mappings note), so a re-submit can't re-attach a
+// mapping either. Anonymous-friendly, same as the original submission.
 function resubmitFood(foodId) {
-  if (!isLoggedIn()) {
-    showStatus('Log in to submit foods', true);
-    showLoginEmailPanel();
-    return;
-  }
   dbGetFood(foodId, function (food) {
     if (!food) { showStatus('Food data unavailable', true); return; }
-    postSubmitJson(foodId, food.name, food.servings, null).then(function (res) {
+    postSubmitJson(foodId, food.name, food.servings).then(function (res) {
       if (res && res.status === 200) {
         dbGetMySubmission(foodId, function (existing) {
           var record = existing || { id: foodId, createdAt: nowSec() };

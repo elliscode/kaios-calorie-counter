@@ -37,8 +37,7 @@ TBD
 |-------|---------|
 | `/test` | Health check — returns `{"status": "up"}` |
 | `/lookup-upc` | Public, no login. Body `{upc}` — looks up a food by barcode in the separate `kaios-calorie-counter-upc-database` table (partition key `upc`, no sort key; see `backend/data-prep/import_barcode_foods_to_dynamo.py`). Normalizes `upc` the same way `backend/data-prep/convert_for_kaios_barcode_dynamodb.py`'s `upc_cleaner` does before the lookup (strips non-digits, left-pads to 12). Returns the stored food (`name`, `upc`, `date`, `servings`) or 404 if that UPC isn't in the table. |
-| `/submit` | **Login required** (see `/account/*` below). Accepts a new food submission from the app's "+ Add New Food" form as plain JSON (`id`, `name`, `servings` — a non-empty array of `{name, quantity, calories, fat, carbohydrates, protein}`, one per serving the user defined — optional `photoKey`, optional `upc`), stores it in DynamoDB with `status: "pending"` and a 30-day TTL for manual review. The same food is also upserted into the submitter's own synced foods collection (`user_foods`) in the same call — one action, two effects. If `upc` is present (not yet sent by the app today, but the backend is ready for when barcode scanning lands there), it also creates a pending UPC mapping to this food's id + its first serving's name and quantity — see `/admin/add-upc-mapping` below for what that is and why a UPC never lives on the food record itself. |
-| `/presigned-post` | **Login required.** Hands out a presigned S3 POST URL/fields so the app can upload a nutrition-facts photo **directly to S3**, bypassing this Lambda entirely. The object key is always `{id}.{extension}` (the food's own GUID), not a separately-generated name, so a submission's DynamoDB record and its photo always address by the same id. |
+| `/submit` | **Anonymous-friendly** — no login required (see `/account/*` below), but attaches to an account when a valid session is present. Accepts a new food submission from the app's "+ Add New Food" form as plain JSON (`id`, `name`, `servings` — a non-empty array of `{name, quantity, calories, fat, carbohydrates, protein}`, one per serving the user defined — optional `upc`), stores it in DynamoDB with `status: "pending"` and a 30-day TTL for manual review. If logged in, the same food is also upserted into the submitter's own synced foods collection (`user_foods`) in the same call — one action, two effects; anonymously, the food already exists purely locally on the submitter's own device (see `frontend-v3/app.js`'s `submitNewFood`), so there's no account to sync it to. If `upc` is present, it also creates a pending UPC mapping to this food's id + its first serving's name and quantity — see `/admin/add-upc-mapping` below for what that is and why a UPC never lives on the food record itself. |
 | `/admin/otp` | Admin login step 1 — texts a one-time code to `ADMIN_PHONE` via the shared SQS-triggered Twilio Lambda |
 | `/admin/login` | Admin login step 2 — verifies the code, sets the session cookie + returns a CSRF token |
 | `/admin/logged-in-check` | Confirms the current session/cookie is still valid |
@@ -49,7 +48,6 @@ TBD
 | `/admin/add-upc-mapping` | Body `{csrf, upc, foodId, foodName, servingName, servingQuantity}`, all required. Directly creates a pending UPC mapping with no food/serving submission involved — used when "Scan Barcode" resolves to a food + serving that already exist exactly as-is. See the UPC mappings note below. |
 | `/admin/review-upc-mapping` | Accepts or rejects a pending UPC mapping — `upc` + `approved` required; `foodId`/`foodName`/`servingName`/`servingQuantity` are optional corrections, same pattern as `/admin/review`. |
 | `/admin/export-upc-mappings` | Returns every approved-but-not-yet-exported UPC mapping as a JSON array of `{upc, foodId, servingName, servingQuantity}` (no `foodName` — that's stored only for display in `admin.html`), then marks them `exported: true`. |
-| `/admin/presigned-get` | Admin-only — presigned S3 GET (view + download) URLs for a submission's photo, since the photos bucket is private |
 | `/account/otp` | End-user login step 1 — emails a one-time code to whatever address the client supplies, via SES. An account is implicitly created on first use — there's no separate signup |
 | `/account/login` | End-user login step 2 — verifies the code, sets the session cookie + returns a CSRF token |
 | `/account/logged-in-check` | Confirms the current end-user session/cookie is still valid |
@@ -71,7 +69,7 @@ A barcode maps to three things — a food, a serving name, **and** a serving qua
 
 ### End-user accounts and sync
 
-Logging in is entirely optional for using the app — diary, browsing the catalog, everything works fully anonymously, exactly as before. The one exception is creating a custom food (`/submit`, and the `/presigned-post` upload that goes with it): both now require a logged-in session, as a deliberate spam gate on the moderation queue.
+Logging in is entirely optional for using the app — diary, browsing the catalog, creating a custom food, all of it works fully anonymously. Admin review is the actual spam gate on the moderation queue, not login. Logging in just attaches a submission to an account (see `/submit` above) and enables multi-device sync via `/sync/*` below.
 
 Every synced item (`user_foods`, `user_diary`, `user_preferences`) is stored **encrypted at rest** — a lightweight stdlib cipher (SHA256-counter-mode keystream, ported from `kaios-shared-list`), keyed by `ENCRYPTION_KEY` below — so a DynamoDB console browse never shows readable diary/food/settings content, only ciphertext. It's an obfuscation layer, not a hardened one: anyone with the code and the key can decrypt, same as the sibling project it's ported from.
 
@@ -84,8 +82,6 @@ Sync uses the same reconciliation approach as `kaios-shared-list`: each sync rou
 | `DOMAIN_NAMES` | `https://calories.elliscode.com,http://calorie-counter.localhost` | Comma-separated allowlist of `Origin` headers — the web app's domain and the packaged KaiOS app's origin. Any request from an origin not in this list gets a 403. |
 | `DYNAMODB_TABLE_NAME` | `kaios-calorie-counter` | The DynamoDB table every route reads/writes. |
 | `UPC_TABLE_NAME` | `kaios-calorie-counter-upc-database` | The separate barcode-lookup table `/lookup-upc` reads (partition key `upc` only, no sort key) — not the same table as `DYNAMODB_TABLE_NAME` above. |
-| `PHOTOS_BUCKET_NAME` | `daniel-townsend-kaios-calorie-counter-userspace` | The private S3 bucket nutrition-facts photos live in — accessed only via presigned URLs (see `PRESIGNED_AWS_ACCESS_KEY_ID` below), never directly by this Lambda. |
-| `PRESIGNED_AWS_ACCESS_KEY_ID` / `PRESIGNED_AWS_SECRET_ACCESS_KEY` | — | Static credentials for a **dedicated** IAM identity used only to sign presigned S3 POST/GET URLs — deliberately not this Lambda's own execution role, so a presigned URL's permissions are scoped to exactly what that identity can do. Shared across the user's other projects; this project's bucket is just added to its existing permissions. |
 | `ADMIN_PHONE` | — | The one legitimate admin's phone number (10 digits, no country code) — `/admin/otp`/`/admin/login` reject anyone else. |
 | `SMS_SQS_QUEUE_URL` | — | The existing, project-agnostic SQS queue that an already-deployed Twilio Lambda consumes to actually send the OTP text — same queue `kaios-t9-wizard` uses, no new queue needed. |
 | `SES_REGION` | `us-east-1` | AWS region for the SES client that sends end-user login OTP emails. |
@@ -99,31 +95,16 @@ Set these on the Lambda function itself (Configuration → Environment variables
 ### One-time AWS setup
 
 1. Create a DynamoDB table named `kaios-calorie-counter` — partition key `key1` (String), sort key `key2` (String). Enable **TTL** on it with `expiration` as the attribute name (used by `otp`/`token` records and by `/submit`'s 30-day-pending-review records).
-2. Confirm the private S3 bucket for submitted nutrition-facts photos exists (currently `daniel-townsend-kaios-calorie-counter-userspace`) — do **not** reuse the public static-app bucket. Add this bucket to the existing dedicated presigned-URL IAM identity's permissions (the one already used for other projects) rather than creating a new role. **Also set the bucket's own CORS configuration** (Permissions → Cross-origin resource sharing) — the photo upload goes straight from the browser to S3 via the presigned POST (bypassing the Lambda entirely), so without this the upload fails with a CORS error even though the presigned URL itself is valid:
-   ```json
-   [
-     {
-       "AllowedHeaders": ["*"],
-       "AllowedMethods": ["POST"],
-       "AllowedOrigins": ["https://calories.elliscode.com"],
-       "ExposeHeaders": ["ETag"],
-       "MaxAgeSeconds": 3000
-     }
-   ]
-   ```
-   Add the packaged KaiOS app's own origin to `AllowedOrigins` too, once it's known.
-3. Create a Lambda function (e.g. `calorie-counter-api-dev`), Python 3.14 runtime, with the environment variables listed above. Grant its own IAM role `dynamodb:PutItem`/`GetItem`/`UpdateItem`/`Query`/`DeleteItem` on the table, plus `dynamodb:GetItem` on the separate `UPC_TABLE_NAME` table (read-only, since `/lookup-upc` never writes to it), `sqs:SendMessage` on the SMS queue, and `ses:SendEmail`/`ses:SendRawEmail` (scoped to the verified `SES_SENDER_EMAIL` identity) — it needs **no S3 permissions at all**, since every photo operation goes through the separate dedicated presigned credentials instead.
-4. Verify an SES sender identity (or the whole domain) for `SES_SENDER_EMAIL` in the SES console — required before `/account/otp` can actually deliver anything. If the SES account is still in the sandbox, recipient addresses need verifying too (or request production access).
-5. Create the SES template referenced by `SES_TEMPLATE_NAME` — the JSON is checked in at `backend/calorie-counter-otp-template.json` (a reskin of `kaios-shared-list`'s own OTP template: same structure, calorie-counter branding, green motif, and the account-ID line dropped since nothing else in this app surfaces a user-facing account ID):
+2. Create a Lambda function (e.g. `calorie-counter-api-dev`), Python 3.14 runtime, with the environment variables listed above. Grant its own IAM role `dynamodb:PutItem`/`GetItem`/`UpdateItem`/`Query`/`DeleteItem` on the table, plus `dynamodb:GetItem` on the separate `UPC_TABLE_NAME` table (read-only, since `/lookup-upc` never writes to it), and `sqs:SendMessage` on the SMS queue, and `ses:SendEmail`/`ses:SendRawEmail` (scoped to the verified `SES_SENDER_EMAIL` identity) — it needs **no S3 permissions at all**.
+3. Verify an SES sender identity (or the whole domain) for `SES_SENDER_EMAIL` in the SES console — required before `/account/otp` can actually deliver anything. If the SES account is still in the sandbox, recipient addresses need verifying too (or request production access).
+4. Create the SES template referenced by `SES_TEMPLATE_NAME` — the JSON is checked in at `backend/calorie-counter-otp-template.json` (a reskin of `kaios-shared-list`'s own OTP template: same structure, calorie-counter branding, green motif, and the account-ID line dropped since nothing else in this app surfaces a user-facing account ID):
    ```
    cd backend/
    aws ses create-template --cli-input-json file://calorie-counter-otp-template.json
    ```
-6. Generate `ENCRYPTION_KEY` once (`openssl rand -hex 32`) and set it on the Lambda — see the table above for why losing it is unrecoverable.
-7. Set up an API Gateway with an ANY method + proxy integration targeting this Lambda.
-8. Run `sh dev-release.sh` (or `prod-release.sh`) to deploy.
-
-**Not a setup step, just worth knowing**: an S3 Lifecycle rule expiring objects in the photos bucket after 30 days (matching the DynamoDB TTL above) keeps an expired submission's photo from lingering indefinitely as orphaned storage once its DynamoDB record is gone.
+5. Generate `ENCRYPTION_KEY` once (`openssl rand -hex 32`) and set it on the Lambda — see the table above for why losing it is unrecoverable.
+6. Set up an API Gateway with an ANY method + proxy integration targeting this Lambda.
+7. Run `sh dev-release.sh` (or `prod-release.sh`) to deploy.
 
 ### Releasing
 

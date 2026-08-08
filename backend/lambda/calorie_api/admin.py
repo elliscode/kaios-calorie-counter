@@ -137,7 +137,6 @@ def add_food_route(event, admin_phone, body):
                 "key2": food_id,
                 "name": name,
                 "servings": servings,
-                "photoKey": None,
                 "status": "pending",
                 "submittedAt": int(time.time()),
                 "expiration": int(time.time()) + SUBMISSION_TTL_SECONDS,

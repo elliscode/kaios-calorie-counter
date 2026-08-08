@@ -1,0 +1,23 @@
+[
+{"upc":"009800513048","foodId":"8432d976-8a87-4413-9771-154454217e85","servingName":"Bar","servingQuantity":"1"},
+{"upc":"017082883896","foodId":"9497b35a-6a48-45d1-aef0-20fbbc4266ea","servingName":"oz","servingQuantity":"1"},
+{"upc":"024463061095","foodId":"e9fdadbc-fd47-4584-8c80-0f5c69ea4ce4","servingName":"Teaspoons","servingQuantity":"1"},
+{"upc":"028400000666","foodId":"5a80ce6d-ed58-55ac-ac13-3c8620a4edda","servingName":"g","servingQuantity":"35.4"},
+{"upc":"034000070152","foodId":"43d5dc38-4a43-4793-8d92-cabaed9eb30b","servingName":"Pieces","servingQuantity":"2"},
+{"upc":"036632010391","foodId":"ac49c820-b024-44b5-9cac-1e00cec62e88","servingName":"Bottle","servingQuantity":"1"},
+{"upc":"041508152525","foodId":"4507a972-484f-4dc2-ba6d-e36ea285ef54","servingName":"mL","servingQuantity":"330"},
+{"upc":"044000026820","foodId":"628a5356-db83-5be3-bee9-eff67bbcadd6","servingName":"g","servingQuantity":"59"},
+{"upc":"072999493033","foodId":"85175425-8767-55a7-a8d9-0dba5e89b8eb","servingName":"g","servingQuantity":"16"},
+{"upc":"078000083408","foodId":"ce059ac2-e3ec-4ac8-97dd-1ef1a17ebbe5","servingName":"fl oz","servingQuantity":"20"},
+{"upc":"600699003285","foodId":"941d3c9b-7561-55ba-9ae4-1c0e145c83a8","servingName":"piece","servingQuantity":"4"},
+{"upc":"711453808005","foodId":"a1cefc25-497b-564e-b8d0-8f8df07d2988","servingName":"g","servingQuantity":"45"},
+{"upc":"848860045485","foodId":"96366b9a-1bd9-4432-b72e-6862c53545a8","servingName":"Pouch","servingQuantity":"1"},
+{"upc":"017082883919","foodId":"b77976bc-8163-4ff1-85f3-ffe684bc16e3","servingName":"oz","servingQuantity":"3"},
+{"upc":"028400046060","foodId":"af21108e-0664-4601-a95b-5c58aecedc3f","servingName":"g","servingQuantity":"56.7"},
+{"upc":"028400058179","foodId":"6ce18a62-b522-4025-9fc6-e98049f0ae63","servingName":"g","servingQuantity":"35.4"},
+{"upc":"049200007259","foodId":"519e8394-86b1-53f6-bc82-57f1d51338b8","servingName":"teaspoons","servingQuantity":"1"},
+{"upc":"078000083408","foodId":"ce059ac2-e3ec-4ac8-97dd-1ef1a17ebbe5","servingName":"fl oz","servingQuantity":"20"},
+{"upc":"635985006114","foodId":"1a954a36-ce54-4871-bf2c-16d83ef243cc","servingName":"fl oz","servingQuantity":"11.2"},
+{"upc":"652888200128","foodId":"5e2383b2-496b-46d2-a857-3edc35f4d305","servingName":"teaspoons","servingQuantity":"0.75"},
+{"upc":"851076005440","foodId":"e6fd5aa1-9592-416c-a81f-496d27be101f","servingName":"Bag","servingQuantity":"1"}
+]

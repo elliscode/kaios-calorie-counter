@@ -1,6 +1,6 @@
 # KaiOS Calorie Counter
 
-A calorie-counting app for KaiOS feature phones, backed by a food catalog seeded from USDA data (FNDDS + Branded datasets), a Lambda API, and DynamoDB. Optional accounts let diary/foods/recipes/preferences sync across devices — nothing requires an account except submitting a food to the shared public catalog.
+A calorie-counting app for KaiOS feature phones, backed by a food catalog seeded from USDA data (FNDDS + Branded datasets), a Lambda API, and DynamoDB. Optional accounts let diary/foods/recipes/preferences sync across devices — the app is fully usable anonymously, including submitting a food to the shared public catalog; logging in just enables multi-device sync.
 
 ## Repo layout
 
@@ -17,10 +17,10 @@ A calorie-counting app for KaiOS feature phones, backed by a food catalog seeded
 **For users, all reachable from Search's "+ Add…" rows:**
 - **Diary** — log foods against any date, with running calorie/fat/carb/protein (and optional caffeine) totals.
 - **Search** — thousands of USDA-sourced foods, ranked by how often you actually use them.
-- **+ Add new food** — submit a custom food (name, servings, optional nutrition-facts photo) for the shared catalog. Requires being logged in — the one deliberate spam gate in an otherwise fully anonymous-friendly app.
+- **+ Add new food** — submit a custom food (name, servings, optional extra servings) for the shared catalog, fully anonymously; admin review is the actual spam gate on the moderation queue, not login. Logging in attaches the submission to an account instead of leaving it purely local.
 - **+ Add new recipe** — combine several existing foods, each at its own specific quantity, divided across a servings count, into one reusable food. Nutrition is baked in once at save time, not recomputed later.
 - **+ Add guesstimate** — a two-field (name + calories) one-off log entry for vague in-the-moment estimates that don't need to become a searchable food.
-- **Optional account** (email + one-time code, no password) — syncs diary, custom foods, recipes, and preferences across devices using a last-write-wins merge per item. Logging in is never required for anything except the catalog submission above.
+- **Optional account** (email + one-time code, no password) — syncs diary, custom foods, recipes, and preferences across devices using a last-write-wins merge per item. Logging in is never required for anything in the app.
 - **My Foods / My Recipes** (Options) — manage what you've created; My Foods shows each submission's status (Local / Approval Pending / Approved / Rejected), computed entirely on-device from whether the food shows up in the downloaded catalog and how long it's been since submission.
 
 **For catalog moderation:**
@@ -32,7 +32,7 @@ A calorie-counting app for KaiOS feature phones, backed by a food catalog seeded
 KaiOS app (frontend-v3/)
   ├─ static catalog data (calories.elliscode.com, S3) — manifest.json + dated food files, no auth
   └─ API (api.calories.elliscode.com, Lambda + API Gateway + DynamoDB)
-       ├─ /submit, /presigned-post           — custom food submission (login required)
+       ├─ /submit                             — custom food submission (anonymous-friendly)
        ├─ /account/*                          — email OTP login, session refresh
        ├─ /sync/foods, /sync/diary, /sync/preferences  — per-account multi-device sync
        └─ /admin/*                            — moderation (separate phone-OTP admin login)

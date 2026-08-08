@@ -116,36 +116,52 @@ body.dark .search-input {
   border-bottom-color: #4a4a52;
 }
 
-/* File input: no placeholder/floating-label concept, so just a plain
-   static label above the native file-picker control. */
-.file-field {
-  margin: 16px 4px 8px;
+/* Search box + scan button, side by side. The scan button reuses
+   .header-action-btn purely for its existing >240px width-gating (see
+   css/header.css) — that class's own color was tuned for the dark green
+   .header bar it usually sits in, so it's overridden here for the light
+   (and dark-mode) background this input actually sits on. */
+.search-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.file-field label {
-  display: block;
-  font-size: 11px;
+.search-input-wrap .search-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-input-wrap .header-action-btn {
   color: #2E7D32;
-  margin-bottom: 6px;
 }
 
-.file-field input[type="file"] {
+.search-input-wrap .header-action-btn:hover,
+.search-input-wrap .header-action-btn:active {
+  background: rgba(46, 125, 50, 0.12);
+}
+
+body.dark .search-input-wrap .header-action-btn {
+  color: #8bc98e;
+}
+
+body.dark .search-input-wrap .header-action-btn:hover,
+body.dark .search-input-wrap .header-action-btn:active {
+  background: rgba(139, 201, 142, 0.15);
+}
+
+.scan-video {
+  display: block;
   width: 100%;
-  font-size: 12px;
-  color: inherit;
+  border-radius: 6px;
+  background: #000;
+  margin-bottom: 12px;
 }
 
-body.dark .file-field label {
-  color: #81C784;
-}
-
-.file-field input[nav-selected="true"] {
-  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.3);
-  border-radius: 3px;
-}
-
-body.dark .file-field input[nav-selected="true"] {
-  box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.35);
+.scan-error {
+  color: #c0392b;
+  font-size: 13px;
+  min-height: 18px;
 }
 
 /* Secondary/outline button — same shape language as .submit-button but
@@ -228,8 +244,7 @@ body.dark .remove-serving-btn[nav-selected="true"] {
   box-shadow: 0 0 0 3px rgba(229, 115, 115, 0.35);
 }
 
-/* "(optional)" caption above "Add additional serving" — same visual
-   language as the file-field's own label above its control. */
+/* "(optional)" caption above "Add additional serving". */
 .optional-label {
   display: block;
   font-size: 11px;
