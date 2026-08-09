@@ -10,7 +10,7 @@ from calorie_api.utils import (
     login_route,
     logged_in_check_route,
 )
-from calorie_api.submit import submit_food_route
+from calorie_api.submit import submit_food_route, submit_upc_mapping_route
 from calorie_api.admin import (
     get_pending_route,
     review_route,
@@ -102,4 +102,6 @@ def route(event):
         return lookup_upc_route(event)
     if path_equals(event=event, method="POST", path="/submit"):
         return submit_food_route(event)
+    if path_equals(event=event, method="POST", path="/submit-upc-mapping"):
+        return submit_upc_mapping_route(event)
     return format_response(event=event, http_code=403, body={"message": "Forbidden"})

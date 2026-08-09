@@ -4,6 +4,7 @@ var DATA_HOST = 'https://calories.elliscode.com';
 var API_HOST = 'https://api.calories.elliscode.com';
 var SUBMIT_URL = API_HOST + '/submit';
 var LOOKUP_UPC_URL = API_HOST + '/lookup-upc';
+var SUBMIT_UPC_MAPPING_URL = API_HOST + '/submit-upc-mapping';
 var ACCOUNT_OTP_URL = API_HOST + '/account/otp';
 var ACCOUNT_LOGIN_URL = API_HOST + '/account/login';
 var ACCOUNT_LOG_OUT_ALL_URL = API_HOST + '/account/log-out-all';
@@ -16,12 +17,12 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.9';
+var APP_VERSION = '3.0.13';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
 var NON_NUTRIENT_KEYS = [
   'id', 'date', 'foodId', 'foodName', 'servingName', 'quantity', 'name',
-  'guid', 'updated', 'deleted', 'type'
+  'guid', 'updated', 'deleted', 'type', 'mealId'
 ];
 
 var state = {
@@ -39,11 +40,21 @@ var state = {
   // showSearchPanelForRecipeIngredient(), which are the only two entry
   // points into Search and each set this explicitly, so it never leaks.
   searchMode: 'diary',
-  // 'diary' (normal, editing a diary entry) or 'recipe-ingredient' (picking
-  // a quantity/unit for a food being added to a recipe) — see
-  // showServingsPanel() / showRecipeIngredientQtyPanel().
+  // 'diary' (normal, editing a diary entry), 'recipe-ingredient' (picking a
+  // quantity/unit for a food being added to a recipe), or 'diary-add' (the
+  // mandatory add-time serving+meal confirmation, gateOrAddToDiary) — see
+  // showServingsPanel() / showRecipeIngredientQtyPanel() / showDiaryAddConfirmPanel().
   servingsMode: 'diary',
-  recipeBuilder: null
+  recipeBuilder: null,
+  // The raw /lookup-upc result for the UPC currently shown on the Scan
+  // Result panel, if any — read by btn-scan-create-new-food's click
+  // handler to prefill showNewFoodPanel the same way "+ Create new food
+  // using this UPC" already does. null while a lookup is pending, or on a
+  // miss/error.
+  scanLookupFood: null,
+  // {onComplete, onCancel} while panel-servings is open in 'diary-add'
+  // mode — see showDiaryAddConfirmPanel/commitDiaryAdd. null otherwise.
+  pendingDiaryAdd: null
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -124,17 +135,24 @@ function getShowCaffeine() {
   } catch (e) { return false; }
 }
 
-function getShowCaffeineUpdatedAt() {
+// Shared by every field in the `settings` sync blob (showCaffeine, and now
+// the Meals fields below) — the backend merges `settings` as one atomic
+// unit keyed on a single `updated` timestamp (see sync.py's
+// sync_preferences_route), not per-field, so there's deliberately only ever
+// one of these regardless of how many settings fields exist. localStorage
+// key kept as `showCaffeineUpdatedAt` (not renamed) so existing installs
+// don't lose their timestamp.
+function getSettingsUpdatedAt() {
   try { return parseInt(localStorage.getItem('showCaffeineUpdatedAt'), 10) || 0; } catch (e) { return 0; }
 }
 
-function setShowCaffeineUpdatedAt(ts) {
+function setSettingsUpdatedAt(ts) {
   try { localStorage.setItem('showCaffeineUpdatedAt', String(ts)); } catch (e) { /* ignore */ }
 }
 
 function setShowCaffeine(show) {
   try { localStorage.setItem('showCaffeine', String(show)); } catch (e) { /* ignore */ }
-  setShowCaffeineUpdatedAt(nowSec());
+  setSettingsUpdatedAt(nowSec());
   applyCaffeineVisibility();
   syncPreferences();
 }
@@ -147,6 +165,144 @@ function applyCaffeineVisibility() {
   if (rowSum) rowSum.style.display = display;
   if (rowServ) rowServ.style.display = display;
   if (rowRecipe) rowRecipe.style.display = display;
+}
+
+// ─── Meals setting ──────────────────────────────────────────────────────
+// Off by default — grouping the diary by meal is opt-in. Meal names/order
+// live in the same `settings` sync blob as showCaffeine (see
+// getSettingsUpdatedAt above) rather than their own IndexedDB store/sync
+// collection — this list is edited rarely, so the whole-blob-newer-wins
+// tradeoff already accepted for showCaffeine is an acceptable fit, and it
+// makes reordering free (array position IS the order, no separate field to
+// reconcile across devices).
+
+var DEFAULT_MEALS = [
+  { id: 'breakfast', name: 'Breakfast' },
+  { id: 'lunch', name: 'Lunch' },
+  { id: 'dinner', name: 'Dinner' },
+  { id: 'snacks', name: 'Snacks' }
+];
+
+function getMealsEnabled() {
+  try { return localStorage.getItem('mealsEnabled') === 'true'; } catch (e) { return false; }
+}
+
+function setMealsEnabled(on) {
+  try { localStorage.setItem('mealsEnabled', String(on)); } catch (e) { /* ignore */ }
+  setSettingsUpdatedAt(nowSec());
+  syncPreferences();
+}
+
+function getRequireMealSelection() {
+  try {
+    var raw = localStorage.getItem('requireMealSelection');
+    return raw === null ? true : raw === 'true'; // default ON
+  } catch (e) { return true; }
+}
+
+function setRequireMealSelection(on) {
+  try { localStorage.setItem('requireMealSelection', String(on)); } catch (e) { /* ignore */ }
+  setSettingsUpdatedAt(nowSec());
+  syncPreferences();
+}
+
+// getMeals() doubles as the one-time seed for the four default meals —
+// there's no onupgradeneeded-style hook for a localStorage value, so
+// seeding happens lazily on first read instead. `mealsSeeded` (distinct
+// from "the array is empty") is what stops a user who deliberately deletes
+// every meal from having them silently reappear on the next read.
+function getMeals() {
+  try {
+    var raw = localStorage.getItem('meals');
+    if (raw === null) {
+      if (localStorage.getItem('mealsSeeded') === 'true') return [];
+      localStorage.setItem('meals', JSON.stringify(DEFAULT_MEALS));
+      localStorage.setItem('mealsSeeded', 'true');
+      return DEFAULT_MEALS.slice();
+    }
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) { return []; }
+}
+
+function setMeals(meals) {
+  try {
+    localStorage.setItem('meals', JSON.stringify(meals));
+    localStorage.setItem('mealsSeeded', 'true');
+  } catch (e) { /* ignore */ }
+  setSettingsUpdatedAt(nowSec());
+  syncPreferences();
+}
+
+function applyMealsVisibility() {
+  var on = getMealsEnabled();
+  var display = on ? '' : 'none';
+  ['opt-meals', 'opt-require-meal-selection'].forEach(function (id) {
+    var row = document.getElementById(id);
+    row.style.display = display;
+    row.setAttribute('nav-selectable', on ? 'true' : 'false');
+  });
+}
+
+function refreshOptionsMealsCount() {
+  var count = getMeals().length;
+  document.getElementById('opt-meals-count').textContent = count ? String(count) : '';
+}
+
+// Shared by every place a meal-picker <select> shows up: panel-servings
+// (both editing an existing entry and the add-time confirmation) and the
+// Guesstimate form's own inline field.
+function applyMealFieldVisibility(wrapId, show) {
+  var wrap = document.getElementById(wrapId);
+  wrap.style.display = show ? '' : 'none';
+  wrap.setAttribute('nav-selectable', show ? 'true' : 'false');
+}
+
+// `required`: adds a disabled "— Select a meal —" placeholder, initially
+// selected, that callers reject as an invalid submission until changed.
+// "Other" (value '') is always a real, selectable choice even when
+// required — mandatory means the step itself can't be skipped, not that
+// "no meal" is a banned answer.
+function populateMealSelect(selectEl, selectedMealId, required) {
+  selectEl.innerHTML = '';
+  if (required) {
+    var placeholder = document.createElement('option');
+    placeholder.value = '__unset__';
+    placeholder.textContent = '— Select a meal —';
+    placeholder.disabled = true;
+    selectEl.appendChild(placeholder);
+  }
+  getMeals().forEach(function (m) {
+    var opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.name;
+    selectEl.appendChild(opt);
+  });
+  var otherOpt = document.createElement('option');
+  otherOpt.value = '';
+  otherOpt.textContent = 'Other';
+  selectEl.appendChild(otherOpt);
+
+  var validIds = getMeals().map(function (m) { return m.id; }).concat(['']);
+  selectEl.value = (selectedMealId && validIds.indexOf(selectedMealId) !== -1)
+    ? selectedMealId
+    : (required ? '__unset__' : '');
+}
+
+// The seam every diary-add call site funnels through instead of calling
+// addFoodToDiaryDefault/addFoodToDiaryWithServing directly. The instant
+// branch is byte-for-byte what every call site already did before this
+// feature existed — Meals-off/Require-off behavior is unchanged.
+// `prefillServingName`/`prefillQuantity` non-null when the caller already
+// resolved a specific serving (UPC paths); null to prefill from
+// defaultServingForFood (search/Tray/new-food/recipe).
+function gateOrAddToDiary(food, prefillServingName, prefillQuantity, onComplete, onCancel) {
+  if (!(getMealsEnabled() && getRequireMealSelection())) {
+    if (prefillServingName) addFoodToDiaryWithServing(food, prefillServingName, prefillQuantity, onComplete, null);
+    else addFoodToDiaryDefault(food, onComplete, null);
+    return;
+  }
+  showDiaryAddConfirmPanel(food, prefillServingName, prefillQuantity, onComplete, onCancel);
 }
 
 // ─── Account session (email OTP login) ─────────────────────────────────────
@@ -520,9 +676,13 @@ function dbSetLastServing(foodId, servingName, quantity, callback) {
 }
 
 // ─── My Foods bookkeeping (mySubmissions) ──────────────────────────────────
-// Never sent to /sync/* directly — purely local, survives a catalog-sync
-// overwrite of the corresponding `foods` record since it lives in its own
-// store. See computeMyFoodStatus() for how these rows turn into a status.
+// Never sent to /sync/* directly — purely local. A row here is deliberately
+// wiped, not preserved, the moment its food shows up in a catalog sync (see
+// syncData) — once a food is in the catalog there's nothing left to track:
+// no live admin channel exists to report "yours got approved" (see
+// review_route in backend/lambda/calorie_api/admin.py), so this row's only
+// job was ever to drive computeMyFoodStatus()'s "pending" display before
+// that point.
 
 function dbGetAllMySubmissions(callback) {
   var tx = db.transaction('mySubmissions', 'readonly');
@@ -548,6 +708,18 @@ function dbGetMySubmission(id, callback) {
 function dbDeleteMySubmission(foodId, callback) {
   var tx = db.transaction('mySubmissions', 'readwrite');
   tx.objectStore('mySubmissions').delete(foodId);
+  tx.oncomplete = function () { callback(); };
+  tx.onerror = function () { callback(); };
+}
+
+// Called with every id in a downloaded catalog file (see syncData) — most
+// won't have a row at all, but deleting a non-existent key is a harmless
+// no-op, cheaper than checking existence first for what's normally a
+// thousand-plus id batch.
+function dbBulkDeleteMySubmissions(ids, callback) {
+  var tx = db.transaction('mySubmissions', 'readwrite');
+  var store = tx.objectStore('mySubmissions');
+  ids.forEach(function (id) { store.delete(id); });
   tx.oncomplete = function () { callback(); };
   tx.onerror = function () { callback(); };
 }
@@ -777,8 +949,7 @@ function syncData(onFileStart, onFileProgress, callback, force) {
                 return;
               }
               // Tagged as 'catalog' here — this is the one place a food ever
-              // becomes an "Approved" My Foods entry (see
-              // computeMyFoodStatus), since a user-submitted food only ever
+              // becomes catalog data, since a user-submitted food only ever
               // reaches this path once it's been approved+exported and
               // shows up in a downloaded manifest data file under its
               // original id.
@@ -789,7 +960,12 @@ function syncData(onFileStart, onFileProgress, callback, force) {
                 return f;
               });
               dbBulkPutFoods(tagged, function () {
-                dbMarkFileSynced(fileEntry.id, function () { fetchNext(i + 1); });
+                // Any mySubmissions row for one of these ids is now stale —
+                // see dbBulkDeleteMySubmissions above for why this drops it
+                // rather than leaving an "Approved" trace behind.
+                dbBulkDeleteMySubmissions(tagged.map(function (f) { return f.id; }), function () {
+                  dbMarkFileSynced(fileEntry.id, function () { fetchNext(i + 1); });
+                });
               });
             })
             .catch(function (err) {
@@ -879,25 +1055,35 @@ function buildFoodsSyncPayload(callback) {
 // `merged` is {foodId: {...fields, updated, deleted}}. If a food is already
 // known locally as a real catalog entry (source:'catalog' — i.e. it was
 // already approved+exported and downloaded via the normal manifest sync),
-// that status wins and is never demoted back to 'local' by this merge, even
-// though this same id is also present in the account's own synced-foods
-// collection server-side. Forwards fields generically, same reasoning as
+// that status wins and this merge doesn't touch it at all — not even
+// deleted/updated — even though this same id is also present in the
+// account's own synced-foods collection server-side. Skipping it entirely
+// (rather than just protecting `source`) matters: buildFoodsSyncPayload only
+// reports an id it still has a mySubmissions row for, and a local DB clear
+// wipes mySubmissions along with everything else — so the very next
+// /sync/foods call after a clear says nothing about this food, and the
+// server dutifully echoes back whatever it last knew (e.g. an old delete
+// tombstone from before the clear). Applying that here would silently
+// re-hide a food syncData just finished correctly resurrecting from the
+// catalog. A catalog food's local state is only ever supposed to come from
+// syncData's manifest sync, never from this account-level merge. Forwards
+// fields generically for everything else, same reasoning as
 // buildFoodsSyncPayload above — a recipe's extra fields must survive coming
 // back in too, not just going out.
 function applyFoodsSyncMerge(merged, callback) {
   var ids = Object.keys(merged);
   if (!ids.length) { callback(); return; }
   var remaining = ids.length;
+  function done() { remaining--; if (remaining === 0) callback(); }
   ids.forEach(function (id) {
     var item = merged[id];
     dbGetFood(id, function (existing) {
-      var isCatalog = existing && existing.source === 'catalog';
-      var food = { id: id, source: isCatalog ? 'catalog' : 'local' };
+      if (existing && existing.source === 'catalog') { done(); return; }
+      var food = { id: id, source: 'local' };
       Object.keys(item).forEach(function (k) { food[k] = item[k]; });
       dbBulkPutFoods([food], function () {
         upsertStateFood(food);
-        remaining--;
-        if (remaining === 0) callback();
+        done();
       });
     });
   });
@@ -912,7 +1098,12 @@ function applyFoodsSyncMerge(merged, callback) {
 // against the catalog regardless. Recipes are explicitly excluded — they
 // never go through catalog submission, so a recipe synced down from
 // another device must never get a spurious mySubmissions row (which would
-// leak it into My Foods with a bogus status).
+// leak it into My Foods with a bogus status). A catalog food is excluded
+// too, and for a stronger reason than "spurious status": this account's own
+// synced-foods data can be stale (e.g. it still remembers this id from
+// before it was approved), and this function runs right after syncData may
+// have just deleted this exact id's mySubmissions row on purpose (see
+// dbBulkDeleteMySubmissions) — recreating it here would silently undo that.
 function reconcileMySubmissionsFromFoodsSync(merged, callback) {
   var ids = Object.keys(merged).filter(function (id) {
     return merged[id].deleted !== true && merged[id].type !== 'recipe';
@@ -924,11 +1115,12 @@ function reconcileMySubmissionsFromFoodsSync(merged, callback) {
     var missing = ids.filter(function (id) { return !known[id]; });
     if (!missing.length) { callback(); return; }
     var remaining = missing.length;
+    function done() { remaining--; if (remaining === 0) callback(); }
     missing.forEach(function (id) {
-      var approxTime = merged[id].updated || nowSec();
-      dbPutMySubmission({ id: id, createdAt: approxTime, submittedAt: approxTime, submitStatus: 'pending' }, function () {
-        remaining--;
-        if (remaining === 0) callback();
+      dbGetFood(id, function (existing) {
+        if (existing && existing.source === 'catalog') { done(); return; }
+        var approxTime = merged[id].updated || nowSec();
+        dbPutMySubmission({ id: id, createdAt: approxTime, submittedAt: approxTime, submitStatus: 'pending' }, done);
       });
     });
   });
@@ -1032,10 +1224,28 @@ function syncDiaryForDate(date, callback) {
 }
 
 function applyPreferencesSyncMerge(merged, callback) {
-  if (merged.settings && typeof merged.settings.showCaffeine === 'boolean') {
-    try { localStorage.setItem('showCaffeine', String(merged.settings.showCaffeine)); } catch (e) { /* ignore */ }
-    if (merged.settings.updated) setShowCaffeineUpdatedAt(merged.settings.updated);
+  if (merged.settings) {
+    // Writes localStorage directly rather than through the setters — the
+    // setters each call syncPreferences() themselves, which would turn
+    // applying a sync response into triggering another sync.
+    if (typeof merged.settings.showCaffeine === 'boolean') {
+      try { localStorage.setItem('showCaffeine', String(merged.settings.showCaffeine)); } catch (e) { /* ignore */ }
+    }
+    if (typeof merged.settings.mealsEnabled === 'boolean') {
+      try { localStorage.setItem('mealsEnabled', String(merged.settings.mealsEnabled)); } catch (e) { /* ignore */ }
+    }
+    if (typeof merged.settings.requireMealSelection === 'boolean') {
+      try { localStorage.setItem('requireMealSelection', String(merged.settings.requireMealSelection)); } catch (e) { /* ignore */ }
+    }
+    if (Array.isArray(merged.settings.meals)) {
+      try {
+        localStorage.setItem('meals', JSON.stringify(merged.settings.meals));
+        localStorage.setItem('mealsSeeded', 'true'); // a merge response means this account has real settings, seeded or not
+      } catch (e) { /* ignore */ }
+    }
+    if (merged.settings.updated) setSettingsUpdatedAt(merged.settings.updated);
     applyCaffeineVisibility();
+    applyMealsVisibility();
   }
   var lastServings = merged.lastServings || {};
   var usageCounts = merged.usageCounts || {};
@@ -1077,7 +1287,13 @@ function syncPreferences(callback) {
       });
       var body = {
         csrf: getCsrf(),
-        settings: { showCaffeine: getShowCaffeine(), updated: getShowCaffeineUpdatedAt() || nowSec() },
+        settings: {
+          showCaffeine: getShowCaffeine(),
+          mealsEnabled: getMealsEnabled(),
+          requireMealSelection: getRequireMealSelection(),
+          meals: getMeals(),
+          updated: getSettingsUpdatedAt() || nowSec()
+        },
         lastServings: lastServings,
         usageCounts: usageCounts
       };
@@ -1175,10 +1391,10 @@ function updateSoftkeysForFocus() {
       setSoftkeys('Back', label, 'Tray');
     }
   } else if (panel.id === 'panel-servings') {
-    if (state.servingsMode === 'recipe-ingredient') {
-      setSoftkeys('Back', 'Add', '');
-    } else {
+    if (state.servingsMode === 'diary') {
       setSoftkeys('Back', 'Save', 'Delete');
+    } else {
+      setSoftkeys('Back', 'Add', '');
     }
   } else if (panel.id === 'panel-new-food') {
     var onSubmitBtn = isNewFoodSubmitBtn(focused());
@@ -1191,6 +1407,12 @@ function updateSoftkeysForFocus() {
     setSoftkeys('Back', onGuessSubmit ? 'Add' : 'Next', '');
   } else if (panel.id === 'panel-scan') {
     setSoftkeys('Cancel', '', '');
+  } else if (panel.id === 'panel-scan-result') {
+    // 'Select' only makes sense while focus is on a row/button (a match
+    // result or "+ Create new food") — blank while typing into either text
+    // field, same reasoning New Food's dynamic Next/Submit label uses for
+    // "only show an action label when the focused control actually has one".
+    setSoftkeys('Back', isTextInput(focused()) ? '' : 'Select', '');
   } else if (panel.id === 'panel-options') {
     setSoftkeys('Back', 'SELECT', '');
   } else if (panel.id === 'panel-login-email') {
@@ -1201,6 +1423,10 @@ function updateSoftkeysForFocus() {
     setSoftkeys('Back', 'SELECT', '');
   } else if (panel.id === 'panel-my-recipes') {
     setSoftkeys('Back', 'SELECT', '');
+  } else if (panel.id === 'panel-meals') {
+    setSoftkeys('Back', 'SELECT', '');
+  } else if (panel.id === 'panel-meal-edit') {
+    setSoftkeys('Back', 'Save', '');
   }
 }
 
@@ -1476,6 +1702,11 @@ function handleSoftLeft() {
   } else if (panel.id === 'panel-servings') {
     if (state.servingsMode === 'recipe-ingredient') {
       resumeRecipeBuilderPanel();
+    } else if (state.servingsMode === 'diary-add') {
+      var cancelled = state.pendingDiaryAdd;
+      state.pendingDiaryAdd = null;
+      showDiaryPanel();
+      if (cancelled && cancelled.onCancel) cancelled.onCancel();
     } else {
       showDiaryPanel();
     }
@@ -1490,6 +1721,8 @@ function handleSoftLeft() {
     returnToSearchPanel();
   } else if (panel.id === 'panel-scan') {
     closeScanPanel();
+  } else if (panel.id === 'panel-scan-result') {
+    returnToSearchPanel();
   } else if (panel.id === 'panel-options') {
     showDiaryPanel();
   } else if (panel.id === 'panel-login-email') {
@@ -1500,6 +1733,10 @@ function handleSoftLeft() {
     showOptionsPanel();
   } else if (panel.id === 'panel-my-recipes') {
     showOptionsPanel();
+  } else if (panel.id === 'panel-meals') {
+    showOptionsPanel();
+  } else if (panel.id === 'panel-meal-edit') {
+    showMealsPanel();
   }
   // panel-diary: no left-softkey action
 }
@@ -1512,7 +1749,7 @@ function handleSoftRight() {
   } else if (panel.id === 'panel-search') {
     if (state.searchMode !== 'recipe-ingredient') addFocusedToTray();
   } else if (panel.id === 'panel-servings') {
-    if (state.servingsMode !== 'recipe-ingredient') deleteCurrentEntry();
+    if (state.servingsMode === 'diary') deleteCurrentEntry();
   }
   // panel-options: no right-softkey action
 }
@@ -1542,6 +1779,8 @@ document.getElementById('sk-center').addEventListener('click', function () {
     submitLoginEmail();
   } else if (panel.id === 'panel-login-otp') {
     submitLoginOtp();
+  } else if (panel.id === 'panel-meal-edit') {
+    saveMealEdit();
   } else {
     interact(focused());
   }
@@ -1571,40 +1810,80 @@ document.getElementById('input-diary-date').addEventListener('change', function 
 
 wireFocusForwardingWrapper('wrap-diary-date', 'input-diary-date');
 
+// createdAt is only set going forward (see buildDiaryEntry/submitGuesstimate)
+// — an entry from before this field existed falls back to `updated` (still
+// accurate for one that's never been edited since) and then to the local
+// autoincrement `id` as a last resort for a genuinely field-less record.
+function diaryEntryAddedAt(entry) {
+  return entry.createdAt || entry.updated || entry.id || 0;
+}
+
+function buildDiaryRow(entry) {
+  var li = document.createElement('li');
+  li.className = 'food-row';
+  li.setAttribute('nav-selectable', 'true');
+  li.setAttribute('data-entry-id', entry.id);
+
+  var name = document.createElement('span');
+  name.className = 'food-row-name';
+  name.textContent = entry.foodName;
+
+  var serving = document.createElement('span');
+  serving.className = 'food-row-serving';
+  serving.textContent = formatQty(entry.quantity) + ' ' + entry.servingName;
+
+  var cal = document.createElement('span');
+  cal.className = 'food-row-calories';
+  cal.textContent = Math.round(entry.calories || 0);
+
+  li.appendChild(name);
+  li.appendChild(serving);
+  li.appendChild(cal);
+  li.addEventListener('click', function () { showServingsPanel(entry); });
+  return li;
+}
+
+// Buckets entries into getMeals()'s order, plus a trailing "Other" group for
+// anything with no mealId or one pointing at a since-deleted meal — the
+// same check covers both cases for free, no cleanup pass needed anywhere
+// when a meal gets deleted (see deleteMeal). Empty groups aren't rendered.
+function renderDiaryGrouped(ul, entries) {
+  var meals = getMeals();
+  var validIds = {};
+  meals.forEach(function (m) { validIds[m.id] = true; });
+  var byMeal = {};
+  meals.forEach(function (m) { byMeal[m.id] = []; });
+  var other = [];
+  entries.forEach(function (e) {
+    if (e.mealId && validIds[e.mealId]) byMeal[e.mealId].push(e);
+    else other.push(e);
+  });
+  meals.forEach(function (m) { appendDiaryGroup(ul, m.name, byMeal[m.id]); });
+  appendDiaryGroup(ul, 'Other', other);
+}
+
+function appendDiaryGroup(ul, label, groupEntries) {
+  if (!groupEntries.length) return;
+  var header = document.createElement('li');
+  header.className = 'diary-group-header';
+  header.textContent = label;
+  ul.appendChild(header);
+  groupEntries.forEach(function (entry) { ul.appendChild(buildDiaryRow(entry)); });
+}
+
 function renderDiary(callback) {
   dbGetDiaryByDate(state.currentDate, function (rawEntries) {
     // Tombstoned entries stay in IndexedDB (see dbSoftDeleteDiaryEntry) so a
     // later sync can report the deletion — they're just never shown.
-    var entries = rawEntries.filter(function (e) { return e.deleted !== true; });
+    var entries = rawEntries.filter(function (e) { return e.deleted !== true; })
+      .sort(function (a, b) { return diaryEntryAddedAt(a) - diaryEntryAddedAt(b); });
     state.diaryEntries = entries;
     var ul = document.getElementById('diary-ul');
     ul.innerHTML = '';
     document.getElementById('diary-empty').style.display = entries.length ? 'none' : 'block';
 
-    entries.forEach(function (entry) {
-      var li = document.createElement('li');
-      li.className = 'food-row';
-      li.setAttribute('nav-selectable', 'true');
-      li.setAttribute('data-entry-id', entry.id);
-
-      var name = document.createElement('span');
-      name.className = 'food-row-name';
-      name.textContent = entry.foodName;
-
-      var serving = document.createElement('span');
-      serving.className = 'food-row-serving';
-      serving.textContent = formatQty(entry.quantity) + ' ' + entry.servingName;
-
-      var cal = document.createElement('span');
-      cal.className = 'food-row-calories';
-      cal.textContent = Math.round(entry.calories || 0);
-
-      li.appendChild(name);
-      li.appendChild(serving);
-      li.appendChild(cal);
-      li.addEventListener('click', function () { showServingsPanel(entry); });
-      ul.appendChild(li);
-    });
+    if (getMealsEnabled()) renderDiaryGrouped(ul, entries);
+    else entries.forEach(function (entry) { ul.appendChild(buildDiaryRow(entry)); });
 
     renderDiarySummary(entries);
     if (callback) callback();
@@ -1743,19 +2022,31 @@ function renderSearchResults(query) {
   }
 }
 
+// Shared by renderUpcSearchResult (manual UPC typed into Search) and
+// handleScannedUpc (a camera scan) — both need the identical "is this UPC
+// already mapped to a food we actually have locally" check. A mapping that
+// points at a food that hasn't synced locally yet (rare: mapping and
+// catalog files synced at different times) does NOT count as a hit — pure
+// local check, no network call at all.
+function resolveLocalUpcMapping(upc, callback) {
+  dbGetUpcMapping(upc, function (mapping) {
+    var food = mapping ? state.foodsById[mapping.foodId] : null;
+    callback(mapping && food ? { food: food, servingName: mapping.servingName, servingQuantity: mapping.servingQuantity } : null);
+  });
+}
+
 // Local UPC-mapping lookup first (no network call at all — per spec,
 // "nothing will happen on the backend" for an already-known mapping), the
 // remote product database only if that misses. Both branches guard against
 // a stale response landing after the user's kept typing by re-checking the
 // search input's current value before touching the DOM.
 function renderUpcSearchResult(upc) {
-  dbGetUpcMapping(upc, function (mapping) {
+  resolveLocalUpcMapping(upc, function (hit) {
     if (document.getElementById('input-search').value.trim() !== upc) return;
 
-    var food = mapping ? state.foodsById[mapping.foodId] : null;
-    if (mapping && food) {
-      insertUpcResultRow(food.name + ' — ' + formatQty(mapping.servingQuantity) + ' ' + mapping.servingName, function () {
-        commitUpcMappedFoodToDiary(food, mapping.servingName, mapping.servingQuantity);
+    if (hit) {
+      insertUpcResultRow(hit.food.name + ' — ' + formatQty(hit.servingQuantity) + ' ' + hit.servingName, function () {
+        commitUpcMappedFoodToDiary(hit.food, hit.servingName, hit.servingQuantity);
       });
       return;
     }
@@ -1834,6 +2125,62 @@ function getScanCodeReader() {
   return scanCodeReader;
 }
 
+// Standard UPC-A check digit (mod-10, 3x-weighted odd positions, 0-indexed
+// from the left) — computed fresh rather than trusted from a scan result,
+// since exactly how many digits ZXing's UPC_E getText() includes isn't
+// something to gamble on (see expandUpcEToUpcA below).
+function upcACheckDigit(digits11) {
+  var sum = 0;
+  for (var i = 0; i < 11; i++) {
+    sum += (digits11.charCodeAt(i) - 48) * (i % 2 === 0 ? 3 : 1);
+  }
+  return String((10 - (sum % 10)) % 10);
+}
+
+// Standard UPC-E -> UPC-A expansion (the GS1 zero-suppression algorithm).
+// Accepts whatever ZXing's UPC_E result text turns out to be — 6 digits
+// (just the compressed code), 7 (number-system digit + compressed code), or
+// 8 (+ a trailing check digit) — the check digit, if present, is ignored
+// and recomputed instead of trusted, for the same reason as above.
+function expandUpcEToUpcA(upcE) {
+  var ns = upcE.length >= 7 ? upcE.charAt(0) : '0';
+  var d = upcE.length >= 7 ? upcE.substr(upcE.length - 7, 6) : upcE.substr(0, 6);
+  var mid;
+  switch (d.charAt(5)) {
+    case '0': case '1': case '2':
+      mid = d.slice(0, 2) + d.charAt(5) + '0000' + d.slice(2, 5);
+      break;
+    case '3':
+      mid = d.slice(0, 3) + '00000' + d.slice(3, 5);
+      break;
+    case '4':
+      mid = d.slice(0, 4) + '00000' + d.charAt(4);
+      break;
+    default:
+      mid = d.slice(0, 5) + '0000' + d.charAt(5);
+  }
+  var digits11 = ns + mid;
+  return digits11 + upcACheckDigit(digits11);
+}
+
+// Barcode-format-aware candidate list for a scanned code, most-preferred
+// first. A UPC_E scan always expands to exactly one UPC-A candidate. An
+// EAN_13 starting with '0' is tried as both the literal 13-digit scan AND
+// the 12-digit UPC-A it's equivalent to (dropping the leading zero) — this
+// app's own UPC data is 12-digit-UPC-centric (backend/lambda/calorie_api/
+// upc.py's _normalize_upc only ever pads a short code up to 12 digits,
+// never trims a longer one down), so a product whose barcode happened to be
+// printed/scanned as EAN-13 would otherwise silently miss every lookup.
+// Everything else (UPC_A, EAN_8, an EAN_13 not starting with '0') is just
+// the one literal scanned value, unchanged.
+function upcLookupCandidates(code, format) {
+  if (format === ZXing.BarcodeFormat.UPC_E) return [expandUpcEToUpcA(code)];
+  if (format === ZXing.BarcodeFormat.EAN_13 && code.length === 13 && code.charAt(0) === '0') {
+    return [code, code.substr(1)];
+  }
+  return [code];
+}
+
 function showScanPanel() {
   document.getElementById('scan-error').textContent = '';
   showPanel('panel-scan');
@@ -1849,10 +2196,8 @@ function showScanPanel() {
     document.getElementById('scan-video'),
     function (result, err) {
       if (result) {
-        var scannedCode = result.getText();
-        closeScanPanel();
-        document.getElementById('input-search').value = scannedCode;
-        renderSearchResults(scannedCode);
+        stopScanCamera();
+        handleScannedUpc(upcLookupCandidates(result.getText(), result.getBarcodeFormat()));
         return;
       }
       // NotFoundException just means no barcode was in this particular
@@ -1867,13 +2212,183 @@ function showScanPanel() {
   });
 }
 
-function closeScanPanel() {
+function stopScanCamera() {
   if (scanCodeReader) scanCodeReader.reset();
+}
+
+function closeScanPanel() {
+  stopScanCamera();
   returnToSearchPanel();
 }
 
 document.getElementById('btn-scan-upc').addEventListener('click', showScanPanel);
 document.getElementById('btn-scan-cancel').addEventListener('click', closeScanPanel);
+
+// Requirement: an already-known local mapping whose food has actually
+// synced locally (state.foodsById resolves it) keeps the exact one-tap
+// behavior scanning already had — commitUpcMappedFoodToDiary, no panel, no
+// extra taps. Every other case (no mapping at all, or a mapping whose food
+// hasn't synced down yet) opens the Scan Result panel instead of the old
+// "fill the search bar" detour. `candidates` (see upcLookupCandidates) is
+// tried in order — a UPC-E/EAN-13 scan may need to check more than one
+// equivalent code before concluding there's no local mapping at all.
+function handleScannedUpc(candidates) {
+  tryLocalUpcCandidates(candidates, 0);
+}
+
+function tryLocalUpcCandidates(candidates, i) {
+  if (i >= candidates.length) {
+    showScanResultPanel(candidates);
+    return;
+  }
+  resolveLocalUpcMapping(candidates[i], function (hit) {
+    if (hit) {
+      commitUpcMappedFoodToDiary(hit.food, hit.servingName, hit.servingQuantity);
+    } else {
+      tryLocalUpcCandidates(candidates, i + 1);
+    }
+  });
+}
+
+// ─── Screen: Scan Result ────────────────────────────────────────────────────
+//
+// Reached only from handleScannedUpc when a scanned UPC has no already-
+// resolved local mapping. Three independent things live here: (a) the
+// scanned code itself, editable in case of a misread digit; (b) a one-shot
+// /lookup-upc product-database check, purely informational; (c) a live
+// search over state.allFoods to match this barcode to an existing food
+// (mirrors #input-search/renderSearchResults); (d) a shortcut into New Food,
+// prefilled from the lookup if one hit. The UPC field is deliberately not
+// re-looked-up on edit — the lookup always reflects the code that was
+// actually scanned; an edited value only ever affects what gets sent by (c)
+// and (d) below.
+
+// `candidates` (see upcLookupCandidates) — the field is prefilled with the
+// first/most-preferred candidate (still fully editable), and the remote
+// lookup below tries every candidate in turn, not just that first one.
+function showScanResultPanel(candidates) {
+  state.scanLookupFood = null;
+  document.getElementById('input-scan-upc').value = candidates[0];
+  document.getElementById('scan-lookup-result').textContent = 'Looking up product…';
+  document.getElementById('input-scan-match-search').value = '';
+  renderScanMatchResults('');
+  showPanel('panel-scan-result');
+  lookupUpcForScanResult(candidates, 0);
+}
+
+function lookupUpcForScanResult(candidates, i) {
+  if (i >= candidates.length) {
+    state.scanLookupFood = null;
+    document.getElementById('scan-lookup-result').textContent = "Couldn't find any food for this UPC";
+    return;
+  }
+  xhrPostJson(LOOKUP_UPC_URL, { upc: candidates[i] }).then(function (res) {
+    // Guards against a stale response landing after the panel's been left
+    // (e.g. user hit Back while the request was in flight) — same
+    // "re-check before touching the DOM" pattern renderUpcSearchResult uses.
+    var panel = activePanel();
+    if (!panel || panel.id !== 'panel-scan-result') return;
+    if (res.status === 200 && res.data) {
+      state.scanLookupFood = res.data;
+      var primary = (res.data.servings || [])[0];
+      var summary = res.data.name + (primary
+        ? (' — ' + formatQty(primary.quantity) + ' ' + primary.name + ', ' + Math.round(primary.calories || 0) + ' cal')
+        : '');
+      document.getElementById('scan-lookup-result').textContent = summary;
+    } else {
+      lookupUpcForScanResult(candidates, i + 1);
+    }
+  }).catch(function () {
+    lookupUpcForScanResult(candidates, i + 1);
+  });
+}
+
+var _scanMatchDebounce = null;
+document.getElementById('input-scan-match-search').addEventListener('input', function (e) {
+  var q = e.target.value;
+  clearTimeout(_scanMatchDebounce);
+  _scanMatchDebounce = setTimeout(function () { renderScanMatchResults(q); }, 150);
+});
+
+// Mirrors renderSearchResults' filtering/sorting exactly but with no CTA
+// rows and no tray — this list exists purely to pick one food to map the
+// barcode to. Recipes are excluded: a UPC identifies a packaged product,
+// and a recipe is a personal combo-food snapshot, not something another
+// shopper's barcode should ever resolve to (same exclusion
+// renderSearchResults already applies while picking a recipe ingredient).
+function renderScanMatchResults(query) {
+  var ul = document.getElementById('scan-match-ul');
+  ul.innerHTML = '';
+  var q = query.trim().toLowerCase();
+  var results = q ? state.allFoods.filter(function (f) {
+    if (f.deleted === true) return false;
+    if (f.type === 'recipe') return false;
+    return f.name.toLowerCase().indexOf(q) !== -1;
+  }).sort(function (a, b) {
+    var countA = state.usageCounts[a.id] || 0;
+    var countB = state.usageCounts[b.id] || 0;
+    if (countB !== countA) return countB - countA;
+    return a.name.localeCompare(b.name);
+  }) : [];
+
+  results.forEach(function (food) {
+    var li = document.createElement('li');
+    li.className = 'search-row';
+    li.setAttribute('nav-selectable', 'true');
+    li.textContent = food.name;
+    li.addEventListener('click', function () { openScanMatchServingSheet(food); });
+    ul.appendChild(li);
+  });
+
+  document.getElementById('scan-match-empty').style.display = (q && !results.length) ? 'block' : 'none';
+}
+
+// Picking which serving this barcode matches — a bottom sheet (the app's
+// existing "pick one of a few options" primitive), not a new panel/inline
+// expansion. No custom quantity entry here — the mapping always uses one of
+// the food's real, already-defined servings as-is.
+function openScanMatchServingSheet(food) {
+  var upc = document.getElementById('input-scan-upc').value.trim();
+  var items = (food.servings || []).map(function (serving) {
+    return {
+      label: formatQty(serving.quantity) + ' ' + serving.name + ' — ' + Math.round(serving.calories || 0) + ' cal',
+      action: function () {
+        closeSheet();
+        commitMatchedFoodToDiaryAndProposeMapping(food, serving, upc);
+      }
+    };
+  });
+  openSheet(items, { title: food.name, note: 'Select the serving this barcode matches' });
+}
+
+// Picking a food+serving here does BOTH — adds it to today's diary
+// immediately (same UX as the existing fast-path/lookup-hit flows: diary
+// panel, "Added X" toast, syncAfterDiaryMutation) AND submits a pending
+// UPC-mapping proposal to the backend. The two effects are independent and
+// don't block each other — the diary add is the user-visible,
+// always-succeeds-locally part; the mapping submission is best-effort/
+// non-blocking, same philosophy as submitNewFoodToApi. Reuses
+// addFoodToDiaryWithServing exactly as commitUpcMappedFoodToDiary already
+// does.
+function commitMatchedFoodToDiaryAndProposeMapping(food, serving, upc) {
+  gateOrAddToDiary(food, serving.name, serving.quantity, function () {
+    showDiaryPanel();
+    showStatus('Added ' + food.name, false);
+    syncAfterDiaryMutation();
+    // Only proposed once the entry is actually committed — if the add-time
+    // confirmation gets cancelled, nothing was matched after all.
+    if (upc) submitUpcMappingProposal(upc, food.id, food.name, serving.name, serving.quantity);
+  });
+}
+
+document.getElementById('btn-scan-create-new-food').addEventListener('click', function () {
+  var upc = document.getElementById('input-scan-upc').value.trim();
+  var lookupFood = state.scanLookupFood;
+  // Identical prefill shape to "+ Create new food using this UPC"
+  // (renderUpcSearchResult) when a lookup hit exists, and to the blank
+  // "+ Add new food" total-miss row (renderSearchResults) otherwise.
+  showNewFoodPanel(lookupFood ? { name: lookupFood.name || '', upc: upc, servings: lookupFood.servings } : { name: '', upc: upc });
+});
 
 function trayHasFood(id) {
   return state.tray.some(function (f) { return f.id === id; });
@@ -1913,9 +2428,9 @@ function rememberServing(foodId, servingName, quantity, callback) {
   dbSetLastServing(foodId, servingName, quantity, callback);
 }
 
-function addFoodToDiaryDefault(food, callback) {
+function addFoodToDiaryDefault(food, callback, mealId) {
   var def = defaultServingForFood(food);
-  var entry = buildDiaryEntry(food, def.serving, def.quantity);
+  var entry = buildDiaryEntry(food, def.serving, def.quantity, mealId);
   dbAddDiaryEntry(entry, function (newId) {
     state.usageCounts[food.id] = (state.usageCounts[food.id] || 0) + 1;
     dbIncrementUsageCount(food.id, function () {
@@ -1929,17 +2444,31 @@ function addFoodToDiaryDefault(food, callback) {
 function commitFoodAndTray(food) {
   var items = state.tray.concat([food]);
   state.tray = [];
-  var remaining = items.length;
-  items.forEach(function (f) {
-    addFoodToDiaryDefault(f, function () {
-      remaining--;
-      if (remaining === 0) {
-        showDiaryPanel();
-        showStatus('Added ' + items.length + (items.length === 1 ? ' item' : ' items'), false);
-        syncAfterDiaryMutation();
-      }
-    });
-  });
+  commitDiaryBatch(items, 0, 0);
+}
+
+// Sequential, not the parallel forEach this used to be — required once a
+// mid-batch confirmation panel (gateOrAddToDiary, when Meals+Require are
+// both on) can interrupt the sequence; each item's gate must fully resolve
+// before the next one opens. When the gate is a no-op (feature off), this
+// still ends up committing every item, same as the old parallel version did.
+function commitDiaryBatch(items, index, committedCount) {
+  if (index >= items.length) { finishDiaryBatch(committedCount); return; }
+  gateOrAddToDiary(items[index], null, null,
+    function () { commitDiaryBatch(items, index + 1, committedCount + 1); },
+    // Backing out mid-batch: keep whatever already committed, drop the
+    // rest — never leaves a silent partial state, always reports an
+    // accurate count.
+    function () { finishDiaryBatch(committedCount); }
+  );
+}
+
+function finishDiaryBatch(committedCount) {
+  showDiaryPanel();
+  if (committedCount) {
+    showStatus('Added ' + committedCount + (committedCount === 1 ? ' item' : ' items'), false);
+    syncAfterDiaryMutation();
+  }
 }
 
 // Same as addFoodToDiaryDefault, but for a specific, already-known serving
@@ -1947,9 +2476,9 @@ function commitFoodAndTray(food) {
 // defaultServingForFood — falls back to the food's first serving if the
 // named one can't be found (shouldn't normally happen, but a serving
 // getting renamed after a mapping was created is possible).
-function addFoodToDiaryWithServing(food, servingName, quantity, callback) {
+function addFoodToDiaryWithServing(food, servingName, quantity, callback, mealId) {
   var serving = food.servings.filter(function (s) { return s.name === servingName; })[0] || food.servings[0];
-  var entry = buildDiaryEntry(food, serving, quantity);
+  var entry = buildDiaryEntry(food, serving, quantity, mealId);
   dbAddDiaryEntry(entry, function (newId) {
     state.usageCounts[food.id] = (state.usageCounts[food.id] || 0) + 1;
     dbIncrementUsageCount(food.id, function () {
@@ -1965,7 +2494,7 @@ function addFoodToDiaryWithServing(food, servingName, quantity, callback) {
 // exactly one food+serving immediately, since a UPC search hit is a single,
 // already-resolved pick rather than part of a multi-item tray session.
 function commitUpcMappedFoodToDiary(food, servingName, quantity) {
-  addFoodToDiaryWithServing(food, servingName, quantity, function () {
+  gateOrAddToDiary(food, servingName, quantity, function () {
     showDiaryPanel();
     showStatus('Added ' + food.name, false);
     syncAfterDiaryMutation();
@@ -2004,7 +2533,7 @@ function autoCreateFoodFromUpcLookup(upc, lookupFood) {
     // submitNewFood — see its own comment for why.
     dbPutMySubmission({ id: id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
       var primary = food.servings[0];
-      addFoodToDiaryWithServing(food, primary.name, primary.quantity, function () {
+      gateOrAddToDiary(food, primary.name, primary.quantity, function () {
         submitNewFoodToApi(id, food.name, food.servings, upc);
         showDiaryPanel();
         showStatus('Added ' + food.name, false);
@@ -2016,7 +2545,7 @@ function autoCreateFoodFromUpcLookup(upc, lookupFood) {
 
 // ─── Serving math ─────────────────────────────────────────────────────────────
 
-function buildDiaryEntry(food, servingObj, qty) {
+function buildDiaryEntry(food, servingObj, qty, mealId) {
   var scale = servingObj.quantity ? (qty / servingObj.quantity) : 0;
   var entry = {
     date: state.currentDate,
@@ -2030,6 +2559,18 @@ function buildDiaryEntry(food, servingObj, qty) {
     // should overwrite this with the entry's original guid afterward.
     guid: generateGuid(),
     updated: nowSec(),
+    // When this entry was first logged — unlike `updated`, this is never
+    // touched again once set (see saveServingsEdit, which explicitly
+    // preserves it across an edit the same way it preserves guid) so the
+    // diary can sort by "when I actually added this" rather than "when I
+    // last touched it". Travels through /sync/diary like any other field,
+    // so it stays accurate even for an entry synced down from another
+    // device — see renderDiary's sort.
+    createdAt: nowSec(),
+    // Which Meals-manager entry this belongs to, or null/undefined for
+    // "Other" — see renderDiaryGrouped. Optional trailing param so every
+    // pre-existing call site that doesn't pass one is unaffected.
+    mealId: mealId || null,
     deleted: false
   };
   Object.keys(servingObj).forEach(function (key) {
@@ -2086,6 +2627,12 @@ function showServingsPanel(entry) {
     if (s.name === entry.servingName) opt.selected = true;
     select.appendChild(opt);
   });
+
+  // Meal reassignment is always optional here (unlike the add-time
+  // confirmation) — you can leave a previously-logged entry unassigned.
+  var mealsOn = getMealsEnabled();
+  applyMealFieldVisibility('wrap-diary-meal', mealsOn);
+  if (mealsOn) populateMealSelect(document.getElementById('input-meal'), entry.mealId, false);
 
   renderServingsPreview();
   setSoftkeys('Back', 'Save', 'Delete');
@@ -2187,6 +2734,7 @@ document.getElementById('input-serving-qty').addEventListener('keydown', functio
 document.getElementById('input-serving-name').addEventListener('change', renderServingsPreview);
 
 wireFocusForwardingWrapper('wrap-serving-name', 'input-serving-name');
+wireFocusForwardingWrapper('wrap-diary-meal', 'input-meal');
 
 function saveServingsEdit() {
   var qty = parseFloat(document.getElementById('input-serving-qty').value) || 0;
@@ -2200,8 +2748,19 @@ function saveServingsEdit() {
     : buildDiaryEntryFromBaseline(state.editingEntry, baseline, qty);
   // Preserve the entry's original guid across an edit — it's the /sync/diary
   // merge key, and a fresh one here would make the server treat this as a
-  // brand new entry rather than an update to the existing one.
+  // brand new entry rather than an update to the existing one. Same for
+  // createdAt — buildDiaryEntry/buildDiaryEntryFromBaseline both stamp a
+  // fresh one as if this were a new entry, but an edit must never change
+  // when the entry was originally added (see renderDiary's sort). Falls
+  // back to whatever was just generated only for a pre-existing entry that
+  // predates this field.
   updated.guid = state.editingEntry.guid || updated.guid;
+  updated.createdAt = state.editingEntry.createdAt || updated.createdAt;
+  // Meals off — this entry's mealId (whatever it already was) is left
+  // completely untouched, same as every other feature-off no-op elsewhere.
+  updated.mealId = getMealsEnabled()
+    ? (document.getElementById('input-meal').value || null)
+    : (state.editingEntry.mealId || null);
   dbUpdateDiaryEntry(state.editingEntry.id, updated, function () {
     if (!state.editingFood) { showDiaryPanel(); syncAfterDiaryMutation(); return; }
     rememberServing(state.editingFood.id, baseline.name, qty, function () {
@@ -2220,6 +2779,7 @@ function saveServingsEdit() {
 // entry.
 function servingsCenterAction() {
   if (state.servingsMode === 'recipe-ingredient') addServingAsRecipeIngredient();
+  else if (state.servingsMode === 'diary-add') commitDiaryAdd();
   else saveServingsEdit();
 }
 
@@ -2249,8 +2809,77 @@ function showRecipeIngredientQtyPanel(food) {
     select.appendChild(opt);
   });
 
+  // A recipe ingredient isn't a diary entry — no meal concept applies.
+  // Must be explicit: this reuses panel-servings' shared DOM, which would
+  // otherwise leak a stale meal picker in from a prior diary/diary-add use.
+  applyMealFieldVisibility('wrap-diary-meal', false);
+
   renderServingsPreview();
   setSoftkeys('Back', 'Add', '');
+}
+
+// Opened only when gateOrAddToDiary() decides confirmation is mandatory
+// (getMealsEnabled() && getRequireMealSelection()). Mirrors
+// showRecipeIngredientQtyPanel's shape — same shared panel/fields, no
+// backing diary row (state.editingEntry stays null) — but commits straight
+// to the diary via commitDiaryAdd() instead of the recipe builder.
+// prefillServingName/prefillQuantity are non-null when the caller already
+// resolved a specific serving (UPC paths); null to prefill from
+// defaultServingForFood's last-used guess.
+function showDiaryAddConfirmPanel(food, prefillServingName, prefillQuantity, onComplete, onCancel) {
+  state.servingsMode = 'diary-add';
+  state.editingFood = food;
+  state.editingEntry = null;
+  state.pendingDiaryAdd = { onComplete: onComplete, onCancel: onCancel };
+
+  showPanel('panel-servings');
+  document.getElementById('servings-panel-title').textContent = 'Add to Diary';
+  document.getElementById('servings-food-name').textContent = food.name;
+
+  var def = prefillServingName
+    ? { serving: (food.servings.filter(function (s) { return s.name === prefillServingName; })[0] || food.servings[0]), quantity: prefillQuantity }
+    : defaultServingForFood(food);
+  document.getElementById('input-serving-qty').value = formatQty(def.quantity);
+
+  var select = document.getElementById('input-serving-name');
+  select.innerHTML = '';
+  food.servings.forEach(function (s) {
+    var opt = document.createElement('option');
+    opt.value = s.name;
+    opt.textContent = s.name;
+    if (s.name === def.serving.name) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  // This panel only ever opens when Meals + Require are both on, so the
+  // meal field is always shown and required here.
+  applyMealFieldVisibility('wrap-diary-meal', true);
+  populateMealSelect(document.getElementById('input-meal'), null, true);
+
+  renderServingsPreview();
+  setSoftkeys('Back', 'Add', '');
+}
+
+function commitDiaryAdd() {
+  var qty = parseFloat(document.getElementById('input-serving-qty').value) || 0;
+  var baseline = currentServingBaseline();
+  var mealSelect = document.getElementById('input-meal');
+  if (!baseline || !qty) { showStatus('Enter a quantity', true); return; }
+  if (mealSelect.value === '__unset__') { showStatus('Select a meal', true); return; }
+  var pending = state.pendingDiaryAdd;
+  var mealId = mealSelect.value || null;
+  addFoodToDiaryWithServing(state.editingFood, baseline.name, qty, function (newId) {
+    state.pendingDiaryAdd = null;
+    // Deliberately no showDiaryPanel() here — navigation is the caller's
+    // call via onComplete, exactly like addFoodToDiaryDefault/
+    // addFoodToDiaryWithServing never navigate on their own either. This
+    // matters for a multi-item Tray batch: showDiaryPanel()'s render is an
+    // async IndexedDB round-trip (see renderDiary), and navigating here
+    // unconditionally would race against the next item's confirmation
+    // panel opening — the delayed render could land moments later and yank
+    // focus back to Diary mid-batch.
+    if (pending && pending.onComplete) pending.onComplete(newId);
+  }, mealId);
 }
 
 function addServingAsRecipeIngredient() {
@@ -2580,7 +3209,7 @@ function submitNewFood() {
     // backend/README.md) — logging in just attaches it to an account for
     // multi-device sync.
     dbPutMySubmission({ id: id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
-      addFoodToDiaryDefault(food, function () {
+      gateOrAddToDiary(food, null, null, function () {
         submitNewFoodToApi(id, name, food.servings, upc);
         showDiaryPanel();
         showStatus('Added ' + name, false);
@@ -2630,6 +3259,25 @@ function postSubmitJson(id, name, servings, upc) {
   return xhrPostJson(SUBMIT_URL, body);
 }
 
+// Best-effort/non-blocking, same philosophy as submitNewFoodToApi above —
+// the diary add this accompanies (commitMatchedFoodToDiaryAndProposeMapping)
+// has already succeeded locally regardless of whether this call ever lands.
+// xhrPostJson already sends cookies, so a logged-in session, if any, is
+// attached automatically; getCsrf() is simply absent when logged out, which
+// the backend's @optionally_authenticate_user treats as anonymous.
+function submitUpcMappingProposal(upc, foodId, foodName, servingName, servingQuantity) {
+  xhrPostJson(SUBMIT_UPC_MAPPING_URL, {
+    csrf: getCsrf(),
+    upc: upc,
+    foodId: foodId,
+    foodName: foodName,
+    servingName: servingName,
+    servingQuantity: String(servingQuantity)
+  }).catch(function (err) {
+    console.log('UPC mapping proposal failed (non-blocking)', err);
+  });
+}
+
 // ─── Screen: Guesstimate ────────────────────────────────────────────────────
 //
 // Deliberately minimal — just a name and a calorie guess, nothing else.
@@ -2641,6 +3289,12 @@ function postSubmitJson(id, name, servings, upc) {
 function showGuesstimatePanel(prefillName) {
   document.getElementById('input-guesstimate-name').value = prefillName || '';
   document.getElementById('input-guesstimate-calories').value = '';
+  // No `food` object exists for a guesstimate, so it can't reuse
+  // gateOrAddToDiary/panel-servings — the meal picker lives directly on
+  // this form instead, shown/required per the same two settings.
+  var mealsOn = getMealsEnabled();
+  applyMealFieldVisibility('wrap-guesstimate-meal', mealsOn);
+  if (mealsOn) populateMealSelect(document.getElementById('input-guesstimate-meal'), null, getRequireMealSelection());
   showPanel('panel-guesstimate');
 }
 
@@ -2667,6 +3321,16 @@ function submitGuesstimate() {
     return;
   }
 
+  var mealId = null;
+  if (getMealsEnabled()) {
+    var mealSelect = document.getElementById('input-guesstimate-meal');
+    if (getRequireMealSelection() && mealSelect.value === '__unset__') {
+      showStatus('Select a meal', true);
+      return;
+    }
+    mealId = mealSelect.value || null;
+  }
+
   var entry = {
     date: state.currentDate,
     foodId: null,
@@ -2680,6 +3344,8 @@ function submitGuesstimate() {
     type: 'guesstimate',
     guid: generateGuid(),
     updated: nowSec(),
+    createdAt: nowSec(),
+    mealId: mealId,
     deleted: false
   };
 
@@ -2911,7 +3577,7 @@ function submitRecipe() {
       // Mirrors submitNewFood()'s immediate-add-to-diary behavior — a recipe
       // never goes through submitNewFoodToApi/`/submit`, it only ever exists
       // locally/synced to this account, never submitted for catalog review.
-      addFoodToDiaryDefault(recipe, function () {
+      gateOrAddToDiary(recipe, null, null, function () {
         showDiaryPanel();
         showStatus('Added ' + name + (skipped ? ' (some ingredients were unavailable and skipped)' : ''), false);
         syncFoods();
@@ -3012,6 +3678,117 @@ function deleteRecipe(recipeId) {
   }
 }
 
+// ─── Screen: Meals ────────────────────────────────────────────────────────────
+//
+// Structurally the same "tap a row, act on it via a sheet" pattern as My
+// Foods/My Recipes above, plus reordering — which has no precedent
+// anywhere else in this app (recipes are alphabetized, not stored-order;
+// recipe ingredients and extra-servings are append-only). Reuses the
+// existing openSheet action-sheet primitive for Move Up/Move Down rather
+// than inventing a drag/drop-style interaction this D-pad UI can't support
+// anyway.
+
+function showMealsPanel() {
+  renderMealsList();
+  showPanel('panel-meals');
+  setSoftkeys('Back', 'SELECT', '');
+}
+
+function renderMealsList() {
+  var meals = getMeals();
+  var ul = document.getElementById('meals-ul');
+  ul.innerHTML = '';
+  document.getElementById('meals-empty').style.display = meals.length ? 'none' : 'block';
+  meals.forEach(function (meal, idx) {
+    var li = document.createElement('li');
+    li.className = 'options-row meal-row';
+    li.setAttribute('nav-selectable', 'true');
+    var name = document.createElement('span');
+    name.className = 'options-label';
+    name.textContent = meal.name;
+    li.appendChild(name);
+    li.addEventListener('click', function () { openMealActionsSheet(idx); });
+    ul.appendChild(li);
+  });
+}
+
+function openMealActionsSheet(idx) {
+  var meals = getMeals();
+  var meal = meals[idx];
+  if (!meal) return;
+  var items = [{ label: 'Rename', action: function () { closeSheet(); promptRenameMeal(idx); } }];
+  if (idx > 0) items.push({ label: 'Move Up', action: function () { closeSheet(); moveMeal(idx, idx - 1); } });
+  if (idx < meals.length - 1) items.push({ label: 'Move Down', action: function () { closeSheet(); moveMeal(idx, idx + 1); } });
+  items.push({ label: 'Delete', danger: true, action: function () { closeSheet(); confirmDeleteMeal(idx); } });
+  items.push({ label: 'Cancel', action: function () { closeSheet(); } });
+  openSheet(items, { title: meal.name, note: 'What would you like to do with this meal?' });
+}
+
+function moveMeal(fromIdx, toIdx) {
+  var meals = getMeals();
+  if (toIdx < 0 || toIdx >= meals.length) return;
+  meals.splice(toIdx, 0, meals.splice(fromIdx, 1)[0]);
+  setMeals(meals);
+  renderMealsList();
+}
+
+function confirmDeleteMeal(idx) {
+  var meal = getMeals()[idx];
+  if (!meal) return;
+  openSheet(
+    [
+      { label: 'Yes, delete "' + meal.name + '"', danger: true, action: function () { closeSheet(); deleteMeal(idx); } },
+      { label: 'Cancel', action: function () { closeSheet(); } }
+    ],
+    { title: 'Delete meal?', note: 'Entries currently assigned to this meal will move to "Other" — they are not deleted.' }
+  );
+}
+
+// Diary entries referencing this meal's id are left completely untouched —
+// renderDiaryGrouped() already treats any mealId not present in getMeals()
+// as unassigned, so this needs no entry-rewrite step at all.
+function deleteMeal(idx) {
+  var meals = getMeals();
+  meals.splice(idx, 1);
+  setMeals(meals);
+  renderMealsList();
+  refreshOptionsMealsCount();
+  showStatus('Deleted', false);
+}
+
+var _mealEditIdx = null; // null => Add; index => Rename
+
+function showAddMealPanel() {
+  _mealEditIdx = null;
+  document.getElementById('meal-edit-title').textContent = 'Add Meal';
+  document.getElementById('input-meal-name').value = '';
+  showPanel('panel-meal-edit');
+}
+
+function promptRenameMeal(idx) {
+  var meal = getMeals()[idx];
+  if (!meal) return;
+  _mealEditIdx = idx;
+  document.getElementById('meal-edit-title').textContent = 'Rename Meal';
+  document.getElementById('input-meal-name').value = meal.name;
+  showPanel('panel-meal-edit');
+}
+
+function saveMealEdit() {
+  var name = document.getElementById('input-meal-name').value.trim();
+  if (!name) { showStatus('Enter a name', true); return; }
+  var meals = getMeals();
+  if (_mealEditIdx === null) meals.push({ id: generateGuid(), name: name });
+  else meals[_mealEditIdx].name = name;
+  setMeals(meals);
+  showMealsPanel();
+  showStatus('Saved', false);
+}
+
+document.getElementById('btn-meals-add').addEventListener('click', showAddMealPanel);
+document.getElementById('btn-meal-edit-save').addEventListener('click', saveMealEdit);
+wireAdvanceOnEnter(document.getElementById('input-meal-name'), saveMealEdit);
+
 // ─── Screen: Options ──────────────────────────────────────────────────────────
 
 function refreshOptionsAccountRow() {
@@ -3037,6 +3814,10 @@ function refreshOptionsAccountRow() {
 function showOptionsPanel() {
   document.getElementById('opt-version').textContent = APP_VERSION;
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
+  document.getElementById('opt-meals-enabled-value').textContent = getMealsEnabled() ? 'On' : 'Off';
+  document.getElementById('opt-require-meal-selection-value').textContent = getRequireMealSelection() ? 'On' : 'Off';
+  applyMealsVisibility();
+  refreshOptionsMealsCount();
   refreshOptionsAccountRow();
   refreshOptionsMyRecipesCount();
 
@@ -3114,6 +3895,20 @@ document.getElementById('opt-show-caffeine').addEventListener('click', function 
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
 });
 
+document.getElementById('opt-meals-enabled').addEventListener('click', function () {
+  setMealsEnabled(!getMealsEnabled());
+  document.getElementById('opt-meals-enabled-value').textContent = getMealsEnabled() ? 'On' : 'Off';
+  applyMealsVisibility();
+  refreshOptionsMealsCount();
+});
+
+document.getElementById('opt-require-meal-selection').addEventListener('click', function () {
+  setRequireMealSelection(!getRequireMealSelection());
+  document.getElementById('opt-require-meal-selection-value').textContent = getRequireMealSelection() ? 'On' : 'Off';
+});
+
+document.getElementById('opt-meals').addEventListener('click', showMealsPanel);
+
 document.getElementById('opt-sync-error-row').addEventListener('click', function () {
   var err = getLastSyncError();
   if (!err) return;
@@ -3148,7 +3943,18 @@ function doClearLocalDb() {
   var req = indexedDB.deleteDatabase(DB_NAME);
   req.onsuccess = function () { window.location.reload(); };
   req.onerror = function () { showStatus('Could not clear the local database', true); };
-  req.onblocked = function () { window.location.reload(); };
+  // Another open connection (a second tab, or even just DevTools' own
+  // IndexedDB inspector viewing this database) blocks the delete rather
+  // than failing it — the request just sits pending until that connection
+  // closes, then onsuccess still fires above. Reloading immediately here
+  // used to be the bug: the reloaded page's indexedDB.open() call queues
+  // up behind this still-pending delete and never resolves, since nothing
+  // closed the blocking connection — the app just hangs forever. Telling
+  // the user what's actually blocking it, instead of reloading into that
+  // hang, is the fix.
+  req.onblocked = function () {
+    showStatus('Close other tabs (or DevTools’ IndexedDB panel) with this app open, then try again', true);
+  };
 }
 
 // ─── Screen: My Foods ─────────────────────────────────────────────────────────
@@ -3218,12 +4024,18 @@ function renderMyFoodsList(callback) {
           name.className = 'options-label';
           name.textContent = food.name;
 
-          var statusEl = document.createElement('span');
-          statusEl.className = 'options-value my-food-status-' + status;
-          statusEl.textContent = MY_FOOD_STATUS_LABELS[status];
+          // Status used to render here ("Local"/"Approval Pending"/etc.) —
+          // dropped since an approved food no longer lingers in this list
+          // at all (see dbBulkDeleteMySubmissions in syncData), so the only
+          // statuses left to show were the uninteresting ones. Calories are
+          // more useful at a glance; computeMyFoodStatus is still used
+          // below, just for openMyFoodActionsSheet's own logic now.
+          var calEl = document.createElement('span');
+          calEl.className = 'options-value';
+          calEl.textContent = Math.round(defaultServingForFood(food).serving.calories || 0) + ' cal';
 
           li.appendChild(name);
-          li.appendChild(statusEl);
+          li.appendChild(calEl);
           li.addEventListener('click', function () { openMyFoodActionsSheet(sub.id, status); });
           rows[idx] = li;
         }

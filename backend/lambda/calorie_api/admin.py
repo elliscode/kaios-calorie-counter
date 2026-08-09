@@ -10,8 +10,6 @@ from .utils import (
     decimal_to_number,
     parse_servings,
     create_upc_mapping,
-    load_encrypted_collection,
-    store_encrypted_collection,
     TABLE_NAME,
     GUID_REGEX,
 )
@@ -257,36 +255,18 @@ def review_route(event, admin_phone, body):
         expr_values[value_placeholder] = value
         set_clauses.append(f"{name_placeholder} = {value_placeholder}")
 
-    result = dynamo.update_item(
+    # Deliberately no write-back into the submitter's own user_foods sync
+    # collection here (there used to be one). A correction made during
+    # review only ever reaches a device via the normal export -> manifest.json
+    # -> catalog sync path, same as approval itself — there is no live
+    # channel from this admin action to any end user's device.
+    dynamo.update_item(
         TableName=TABLE_NAME,
         Key=python_obj_to_dynamo_obj({"key1": "submitted_food", "key2": food_id}),
         UpdateExpression="SET " + ", ".join(set_clauses),
         ExpressionAttributeNames=expr_names,
         ExpressionAttributeValues=python_obj_to_dynamo_obj(expr_values),
-        ReturnValues="ALL_NEW",
     )
-
-    # Keep the original submitter's own synced copy (see submit_food_route's
-    # dual-write into user_foods) matching whatever gets corrected here —
-    # otherwise a name/servings fix made during review only ever shows up in
-    # the export, never on the submitter's own device. Only submissions from
-    # the app carry a userId at all (add_food_route's admin-created ones
-    # don't — there's no end-user to sync back to), and only if that user
-    # still has this food and hasn't deleted it locally in the meantime.
-    if "name" in updates or "servings" in updates:
-        updated_item = {k: decimal_to_number(v) for k, v in dynamo_obj_to_python_obj(result["Attributes"]).items()}
-        user_id = updated_item.get("userId")
-        if user_id:
-            user_foods = load_encrypted_collection("user_foods", user_id)
-            existing = user_foods.get(food_id)
-            if existing and not existing.get("deleted"):
-                user_foods[food_id] = {
-                    "name": updated_item["name"],
-                    "servings": updated_item["servings"],
-                    "updated": int(time.time()),
-                    "deleted": False,
-                }
-                store_encrypted_collection("user_foods", user_id, user_foods)
 
     return format_response(event=event, http_code=200, body={"id": food_id, "approved": approved})
 

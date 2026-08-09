@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.9">
-  <link rel="stylesheet" href="css/header.css?v=3.0.9">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.9">
-  <link rel="stylesheet" href="css/input.css?v=3.0.9">
-  <link rel="stylesheet" href="css/list.css?v=3.0.9">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.9">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.9">
+  <link rel="stylesheet" href="css/root.css?v=3.0.13">
+  <link rel="stylesheet" href="css/header.css?v=3.0.13">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.13">
+  <link rel="stylesheet" href="css/input.css?v=3.0.13">
+  <link rel="stylesheet" href="css/list.css?v=3.0.13">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.13">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.13">
 </head>
 <body>
   <div id="root">
@@ -101,9 +101,11 @@
     </div>
 
     <!-- Panel: Scan Barcode — reached only from Search's scan button (see
-         css/header.css's >240px gating on .header-action-btn); a successful
-         decode feeds straight back into the same UPC search logic Search's
-         own digit-typing path uses. -->
+         css/header.css's >240px gating on .header-action-btn). A successful
+         decode either adds straight to the diary (an already-known local
+         UPC mapping — see handleScannedUpc in app.js) or opens Scan Result
+         below; hand-typing a UPC into Search's own input still uses the
+         older inline-row UPC search path, unchanged. -->
     <div id="panel-scan" class="panel" active="false">
       <div class="header">
         <h1>Scan Barcode</h1>
@@ -114,6 +116,34 @@
         <video id="scan-video" class="scan-video" autoplay muted playsinline></video>
         <p id="scan-error" class="scan-error"></p>
         <button id="btn-scan-cancel" class="secondary-button" type="button" nav-selectable="true">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Panel: Scan Result — reached from a barcode decode (panel-scan)
+         that does NOT resolve to an already-known local UPC mapping; an
+         already-mapped UPC skips this panel entirely (see
+         handleScannedUpc in app.js). -->
+    <div id="panel-scan-result" class="panel" active="false">
+      <div class="header">
+        <h1>Scan Result</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <div class="input-wrap">
+          <input id="input-scan-upc" type="text" inputmode="numeric" placeholder=" " nav-selectable="true">
+          <label for="input-scan-upc">UPC</label>
+        </div>
+
+        <span class="extra-serving-title">Product Lookup</span>
+        <p id="scan-lookup-result" class="hint"></p>
+
+        <span class="extra-serving-title">Match this barcode to an existing food</span>
+        <input id="input-scan-match-search" class="search-input" type="text" placeholder="Search foods" nav-selectable="true">
+        <ul id="scan-match-ul" class="item-list"></ul>
+        <p id="scan-match-empty" class="hint" style="display:none">No matching foods.</p>
+
+        <button id="btn-scan-create-new-food" class="secondary-button" type="button" nav-selectable="true">+ Create new food</button>
       </div>
     </div>
 
@@ -133,6 +163,10 @@
         <div class="input-wrap input-wrap-select" id="wrap-serving-name" nav-selectable="true">
           <select id="input-serving-name"></select>
           <label for="input-serving-name">Serving</label>
+        </div>
+        <div class="input-wrap input-wrap-select" id="wrap-diary-meal" nav-selectable="true" style="display:none">
+          <select id="input-meal"></select>
+          <label for="input-meal">Meal</label>
         </div>
 
         <div class="summary-table" id="servings-summary">
@@ -293,6 +327,10 @@
           <input id="input-guesstimate-calories" type="tel" inputmode="decimal" placeholder=" " nav-selectable="true">
           <label for="input-guesstimate-calories">Calories</label>
         </div>
+        <div class="input-wrap input-wrap-select" id="wrap-guesstimate-meal" nav-selectable="true" style="display:none">
+          <select id="input-guesstimate-meal"></select>
+          <label for="input-guesstimate-meal">Meal</label>
+        </div>
         <button id="btn-guesstimate-submit" class="submit-button" type="button" nav-selectable="true">Add to Diary</button>
       </div>
     </div>
@@ -328,6 +366,18 @@
             <span class="options-label">Show Caffeine</span>
             <span class="options-value" id="opt-show-caffeine-value"></span>
           </li>
+          <li class="options-row" id="opt-meals-enabled" nav-selectable="true">
+            <span class="options-label">Enable Meals</span>
+            <span class="options-value" id="opt-meals-enabled-value"></span>
+          </li>
+          <li class="options-row" id="opt-meals" nav-selectable="true" style="display:none;">
+            <span class="options-label">Meals</span>
+            <span class="options-value" id="opt-meals-count"></span>
+          </li>
+          <li class="options-row" id="opt-require-meal-selection" nav-selectable="true" style="display:none;">
+            <span class="options-label">Require meal selection when adding food</span>
+            <span class="options-value" id="opt-require-meal-selection-value"></span>
+          </li>
           <li class="options-row" id="opt-sync-error-row" nav-selectable="false" style="display:none;">
             <span class="options-label">Last Sync Error</span>
             <span class="options-value" id="opt-sync-error-value"></span>
@@ -362,6 +412,38 @@
       <div class="panel-content">
         <ul id="my-recipes-ul" class="item-list"></ul>
         <p id="my-recipes-empty" class="hint" style="display:none">You haven't created any recipes yet.</p>
+      </div>
+    </div>
+
+    <!-- Panel: Meals (nested under Options) -->
+    <div id="panel-meals" class="panel" active="false">
+      <div class="header">
+        <h1>Meals</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <ul id="meals-ul" class="item-list"></ul>
+        <p id="meals-empty" class="hint" style="display:none">No meals yet — add one below.</p>
+        <button id="btn-meals-add" class="secondary-button" type="button" nav-selectable="true">+ Add meal</button>
+      </div>
+    </div>
+
+    <!-- Panel: Add/Rename Meal — a dedicated panel rather than the sheet
+         component, since sheet.css's #sheet-ul only ever holds action
+         buttons, no text input. -->
+    <div id="panel-meal-edit" class="panel" active="false">
+      <div class="header">
+        <h1 id="meal-edit-title">Add Meal</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <div class="input-wrap">
+          <input id="input-meal-name" type="text" placeholder=" " nav-selectable="true">
+          <label for="input-meal-name">Meal name</label>
+        </div>
+        <button id="btn-meal-edit-save" class="submit-button" type="button" nav-selectable="true">Save</button>
       </div>
     </div>
 
@@ -422,6 +504,6 @@
 
   </div>
   <script src="js/vendor/zxing.min.js"></script>
-  <script src="app.js?v=3.0.9"></script>
+  <script src="app.js?v=3.0.13"></script>
 </body>
 </html>

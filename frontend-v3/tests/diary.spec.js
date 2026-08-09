@@ -72,3 +72,67 @@ test('"+ Add Food" stays first/focused even on a day with entries, ahead of the 
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('.food-row').first()).toHaveAttribute('nav-selected', 'true');
 });
+
+// Seeds entries directly via the app's own dbAddDiaryEntry (exposed on
+// window since app.js runs unbundled) with explicit createdAt values, out
+// of insertion order — proves the render sort actually keys off createdAt
+// and not IndexedDB insertion/autoincrement order, which real same-second
+// UI clicks couldn't reliably distinguish.
+async function seedGuesstimates(page, date, entries) {
+  await page.evaluate(function (args) {
+    return new Promise(function (resolve) {
+      var remaining = args.entries.length;
+      args.entries.forEach(function (e) {
+        dbAddDiaryEntry({
+          date: args.date, foodId: null, foodName: e.name, servingName: 'guess', quantity: 1,
+          calories: 100, fat: 0, carbohydrates: 0, protein: 0, type: 'guesstimate',
+          guid: e.name, updated: e.createdAt, createdAt: e.createdAt, deleted: false
+        }, function () { remaining--; if (remaining === 0) resolve(); });
+      });
+    });
+  }, { date: date, entries: entries });
+}
+
+test('diary entries are sorted oldest-added-first, not by insertion order', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  var today = await page.locator('#input-diary-date').inputValue();
+
+  // Inserted in this order (Last, First, Middle) so id/insertion order would
+  // read Last/First/Middle if the sort were wrong -- createdAt order is
+  // First/Middle/Last.
+  await seedGuesstimates(page, today, [
+    { name: 'Added Last', createdAt: 300 },
+    { name: 'Added First', createdAt: 100 },
+    { name: 'Added Middle', createdAt: 200 }
+  ]);
+
+  await page.reload();
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.food-row-name')).toHaveText(['Added First', 'Added Middle', 'Added Last']);
+});
+
+test('editing an entry does not change its position in the list', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  var today = await page.locator('#input-diary-date').inputValue();
+
+  await seedGuesstimates(page, today, [
+    { name: 'First Logged', createdAt: 100 },
+    { name: 'Second Logged', createdAt: 200 }
+  ]);
+
+  await page.reload();
+  await expect(page.locator('.food-row-name')).toHaveText(['First Logged', 'Second Logged']);
+
+  // Editing bumps `updated` to right now, far later than "Second Logged"'s
+  // createdAt=200 -- if the sort used `updated` (or if the edit path failed
+  // to preserve createdAt), this would jump to the bottom.
+  await page.locator('.food-row', { hasText: 'First Logged' }).click();
+  await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
+  await page.fill('#input-serving-qty', '2');
+  await page.keyboard.press('Enter');
+
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.food-row-name')).toHaveText(['First Logged', 'Second Logged']);
+});

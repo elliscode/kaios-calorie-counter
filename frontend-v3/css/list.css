@@ -64,6 +64,28 @@ body.dark .food-row {
   border-bottom-color: #2e2e30;
 }
 
+/* === Diary meal group headers (see renderDiaryGrouped) === */
+.diary-group-header {
+  display: block;
+  padding: 10px 8px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #2E7D32;
+  border-top: 1px solid #eee;
+  margin-top: 4px;
+}
+
+.diary-group-header:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+body.dark .diary-group-header {
+  color: #81C784;
+  border-top-color: #2e2e30;
+}
+
 /* === Search result rows === */
 .search-row {
   display: block;
@@ -242,43 +264,6 @@ body.dark .options-row {
 
 body.dark .options-value {
   color: #8b8b93;
-}
-
-/* === My Foods status colors === */
-.my-food-status-local {
-  color: #666;
-}
-
-.my-food-status-pending {
-  color: #666;
-}
-
-.my-food-status-approved {
-  color: #2E7D32;
-}
-
-.my-food-status-rejected {
-  color: #c0392b;
-}
-
-.my-food-row[nav-selected="true"] .my-food-status-local,
-.my-food-row[nav-selected="true"] .my-food-status-pending,
-.my-food-row[nav-selected="true"] .my-food-status-approved,
-.my-food-row[nav-selected="true"] .my-food-status-rejected {
-  color: rgba(255, 255, 255, 0.9);
-}
-
-body.dark .my-food-status-local,
-body.dark .my-food-status-pending {
-  color: #8b8b93;
-}
-
-body.dark .my-food-status-approved {
-  color: #81C784;
-}
-
-body.dark .my-food-status-rejected {
-  color: #e57373;
 }
 
 @media (min-width: 241px) {

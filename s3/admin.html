@@ -1081,6 +1081,18 @@ function buildUpcMappingCard(entry) {
   servingQuantityInput.addEventListener('input', refreshPreview);
   refreshPreview();
 
+  // Same search-by-name UI as the scan resolve panel, so reviewing a queued
+  // mapping doesn't require already knowing the food's raw id — picking a
+  // serving here just fills the fields above; Accept still does the actual
+  // review/save.
+  attachFoodSearch(fields, function (food, serving) {
+    foodIdInput.value = food.id;
+    servingNameInput.value = serving.name;
+    servingQuantityInput.value = String(serving.quantity);
+    entry.foodName = food.name;
+    refreshPreview();
+  });
+
   const actions = document.createElement('div');
   actions.className = 'actions';
 
@@ -1753,27 +1765,13 @@ function renderResolveUpcPanel(upc, lookupFood) {
     resolveUpcPanel.appendChild(ref);
   }
 
-  const searchWrap = document.createElement('div');
-  searchWrap.className = 'field';
-  const searchLabel = document.createElement('label');
-  searchLabel.innerText = 'Search existing foods';
-  const searchInput = document.createElement('input');
-  searchInput.type = 'text';
-  searchInput.placeholder = 'e.g. Diet Pepsi';
-  searchWrap.appendChild(searchLabel);
-  searchWrap.appendChild(searchInput);
-  resolveUpcPanel.appendChild(searchWrap);
-
-  const resultsList = document.createElement('div');
-  resultsList.className = 'resolve-upc-results';
-  resolveUpcPanel.appendChild(resultsList);
-
-  const detailWrap = document.createElement('div');
-  resolveUpcPanel.appendChild(detailWrap);
-
-  searchInput.addEventListener('input', function () {
-    renderFoodSearchResults(resultsList, detailWrap, searchInput.value, upc, lookupFood);
-  });
+  attachFoodSearch(resolveUpcPanel, function (food, serving) {
+    saveUpcMapping(upc, food.id, food.name, serving.name, String(serving.quantity)).then(function (ok) {
+      if (ok) closeResolveUpcPanel();
+    });
+  }, function (food) {
+    openAddFoodPanel({ upc: upc, foodId: food.id, foodName: food.name, lookupFood: lookupFood });
+  }, 'Map UPC to');
 
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -1797,13 +1795,13 @@ function renderResolveUpcPanel(upc, lookupFood) {
   resolveUpcPanel.appendChild(actions);
 }
 
-function renderFoodSearchResults(resultsList, detailWrap, query, upc, lookupFood) {
+function renderFoodSearchResults(resultsList, detailWrap, query, onSelect, onNewServing, actionLabel) {
   resultsList.innerHTML = '';
   detailWrap.innerHTML = '';
   const q = query.trim().toLowerCase();
   if (!q) return;
 
-  const matches = searchableFoods().filter(function (food) {
+  const matches = searchableFoods().filter((food) => !!food.name).filter(function (food) {
     return food.name.toLowerCase().indexOf(q) !== -1;
   }).slice(0, 20);
 
@@ -1820,13 +1818,13 @@ function renderFoodSearchResults(resultsList, detailWrap, query, upc, lookupFood
     row.className = 'resolve-upc-result-row';
     row.innerText = food.name;
     row.addEventListener('click', function () {
-      renderFoodServingPicker(detailWrap, food, upc, lookupFood);
+      renderFoodServingPicker(detailWrap, food, onSelect, onNewServing, actionLabel);
     });
     resultsList.appendChild(row);
   });
 }
 
-function renderFoodServingPicker(detailWrap, food, upc, lookupFood) {
+function renderFoodServingPicker(detailWrap, food, onSelect, onNewServing, actionLabel) {
   detailWrap.innerHTML = '';
 
   const heading = document.createElement('div');
@@ -1841,23 +1839,53 @@ function renderFoodServingPicker(detailWrap, food, upc, lookupFood) {
     // Full macro breakdown right on the button — the serving object is
     // already in hand here, no separate preview lookup needed like the
     // mapping cards require.
-    btn.innerText = `Map UPC to: ${serving.quantity} ${serving.name} — ${serving.calories} cal, ` +
+    btn.innerText = `${actionLabel || 'Use'}: ${serving.quantity} ${serving.name} — ${serving.calories} cal, ` +
       `${serving.fat}g fat, ${serving.carbohydrates}g carbs, ${serving.protein}g protein`;
-    btn.addEventListener('click', async function () {
-      const ok = await saveUpcMapping(upc, food.id, food.name, serving.name, String(serving.quantity));
-      if (ok) closeResolveUpcPanel();
-    });
+    btn.addEventListener('click', function () { onSelect(food, serving); });
     detailWrap.appendChild(btn);
   });
 
-  const newServingBtn = document.createElement('button');
-  newServingBtn.type = 'button';
-  newServingBtn.className = 'add-serving';
-  newServingBtn.innerText = '+ This is a new serving size';
-  newServingBtn.addEventListener('click', function () {
-    openAddFoodPanel({ upc: upc, foodId: food.id, foodName: food.name, lookupFood: lookupFood });
+  if (onNewServing) {
+    const newServingBtn = document.createElement('button');
+    newServingBtn.type = 'button';
+    newServingBtn.className = 'add-serving';
+    newServingBtn.innerText = '+ This is a new serving size';
+    newServingBtn.addEventListener('click', function () { onNewServing(food); });
+    detailWrap.appendChild(newServingBtn);
+  }
+}
+
+// Search-by-name + serving picker, reusable anywhere a UPC mapping's
+// foodId/serving fields need filling in. onSelect(food, serving) decides
+// what "picking" means for the caller — immediate save (scan resolve) vs.
+// just filling in fields (queue/edit cards with their own Save button).
+function attachFoodSearch(container, onSelect, onNewServing, actionLabel) {
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'field';
+  const searchLabel = document.createElement('label');
+  searchLabel.innerText = 'Search existing foods';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'e.g. Diet Pepsi';
+  searchWrap.appendChild(searchLabel);
+  searchWrap.appendChild(searchInput);
+  container.appendChild(searchWrap);
+
+  const resultsList = document.createElement('div');
+  resultsList.className = 'resolve-upc-results';
+  container.appendChild(resultsList);
+
+  const detailWrap = document.createElement('div');
+  container.appendChild(detailWrap);
+
+  searchInput.addEventListener('input', function () {
+    renderFoodSearchResults(resultsList, detailWrap, searchInput.value, function (food, serving) {
+      onSelect(food, serving);
+      searchInput.value = '';
+      resultsList.innerHTML = '';
+      detailWrap.innerHTML = '';
+    }, onNewServing, actionLabel);
   });
-  detailWrap.appendChild(newServingBtn);
 }
 
 async function saveUpcMapping(upc, foodId, foodName, servingName, servingQuantity) {

@@ -109,6 +109,8 @@ def sync_preferences_route(event, user_id, body):
     if "settings" in body:
         if not isinstance(body["settings"], dict):
             return format_response(event=event, http_code=400, body="settings must be an object")
+        if _too_large(event, body["settings"]):
+            return format_response(event=event, http_code=400, body="Sync payload too large")
         # Merged as a single-item dict (one key, "settings") so the whole
         # settings blob goes through the same newer-updated-wins codepath as
         # everything else, rather than a bespoke comparison.

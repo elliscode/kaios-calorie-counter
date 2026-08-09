@@ -293,23 +293,27 @@ def store_encrypted_collection(key1, key2, data):
 UPC_MAPPING_TTL_SECONDS = 30 * 24 * 60 * 60  # same as submitted_food's own TTL
 
 
-def create_upc_mapping(upc, food_id, food_name, serving_name, serving_quantity):
-    dynamo.put_item(
-        TableName=TABLE_NAME,
-        Item=python_obj_to_dynamo_obj(
-            {
-                "key1": "upc_mapping",
-                "key2": upc,
-                "upc": upc,
-                "foodId": food_id,
-                "foodName": food_name,  # denormalized for admin display — not part of the final export
-                "servingName": serving_name,
-                "servingQuantity": serving_quantity,
-                "submittedAt": int(time.time()),
-                "expiration": int(time.time()) + UPC_MAPPING_TTL_SECONDS,
-            }
-        ),
-    )
+def create_upc_mapping(upc, food_id, food_name, serving_name, serving_quantity, user_id=None):
+    item = {
+        "key1": "upc_mapping",
+        "key2": upc,
+        "upc": upc,
+        "foodId": food_id,
+        "foodName": food_name,  # denormalized for admin display — not part of the final export
+        "servingName": serving_name,
+        "servingQuantity": serving_quantity,
+        "submittedAt": int(time.time()),
+        "expiration": int(time.time()) + UPC_MAPPING_TTL_SECONDS,
+    }
+    # Internal bookkeeping only, mirroring submitted_food's own "userId"
+    # field — set when the proposer (submit_upc_mapping_route) happened to
+    # have a session. Visible only in the raw /admin/pending payload, never
+    # in export_upc_mappings_route's output. None for every other caller
+    # (admin.py's routes, submit_food_route) — there's no end-user to
+    # attribute those to.
+    if user_id:
+        item["userId"] = user_id
+    dynamo.put_item(TableName=TABLE_NAME, Item=python_obj_to_dynamo_obj(item))
 
 
 # --- Admin login (phone OTP + cookie session) -------------------------------
