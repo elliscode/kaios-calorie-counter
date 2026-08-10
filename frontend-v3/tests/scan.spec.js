@@ -31,7 +31,7 @@ test('a scanned UPC_E code is expanded to UPC-A before any lookup', async ({ pag
   expect(requestedUpcs).toEqual(['042100005264']);
 });
 
-test('a scanned EAN_13 starting with 0 is tried as both the 13-digit and 12-digit form', async ({ page }) => {
+test('a scanned EAN_13 starting with 0 is tried as both the 13-digit and 12-digit form, and a hit on either is added automatically', async ({ page }) => {
   var requestedUpcs = [];
   await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
     var upc = route.request().postDataJSON().upc;
@@ -49,14 +49,12 @@ test('a scanned EAN_13 starting with 0 is tried as both the 13-digit and 12-digi
 
   await scanBarcode(page, '0049000028911', 'EAN_13');
 
-  await expect(page.locator('#panel-scan-result')).toHaveAttribute('active', 'true');
-  // Prefilled with the first/most-preferred candidate — the literal 13-digit scan.
-  await expect(page.locator('#input-scan-upc')).toHaveValue('0049000028911');
-  await expect(page.locator('#scan-lookup-result')).toHaveText('Diet Cola — 1 can, 0 cal');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.status-toast')).toHaveText('Added Diet Cola');
   expect(requestedUpcs).toEqual(['0049000028911', '049000028911']);
 });
 
-test('a new UPC with a lookup hit shows the product summary', async ({ page }) => {
+test('a scanned UPC with a lookup hit is added to the diary automatically, submitting the UPC along with it', async ({ page }) => {
   await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
     route.fulfill({
       contentType: 'application/json',
@@ -68,14 +66,28 @@ test('a new UPC with a lookup hit shows the product summary', async ({ page }) =
     });
   });
 
+  var submitBody = null;
+  await page.route('https://api.calories.elliscode.com/submit', function (route) {
+    submitBody = route.request().postDataJSON();
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
+  });
+
   await scanBarcode(page, '049000028911');
 
-  await expect(page.locator('#panel-scan-result')).toHaveAttribute('active', 'true');
-  await expect(page.locator('#input-scan-upc')).toHaveValue('049000028911');
-  await expect(page.locator('#scan-lookup-result')).toHaveText('Diet Cola — 1 can, 0 cal');
+  // No confirmation panel — scanning a barcode with a lookup hit acts as
+  // if the match had been confirmed already, straight into the diary.
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.status-toast')).toHaveText('Added Diet Cola');
+  await expect(page.locator('.food-row-name')).toHaveText('Diet Cola');
+
+  await expect.poll(function () { return submitBody; }).toMatchObject({
+    name: 'Diet Cola',
+    upc: '049000028911',
+    servings: [{ name: 'can', quantity: 1, calories: 0, fat: 0, carbohydrates: 0, protein: 0 }]
+  });
 });
 
-test('a new UPC with no lookup hit shows the not-found message', async ({ page }) => {
+test('a new UPC with no lookup hit shows "Barcode not found"', async ({ page }) => {
   await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
     route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) });
   });
@@ -83,7 +95,7 @@ test('a new UPC with no lookup hit shows the not-found message', async ({ page }
   await scanBarcode(page, '049000028912');
 
   await expect(page.locator('#panel-scan-result')).toHaveAttribute('active', 'true');
-  await expect(page.locator('#scan-lookup-result')).toHaveText("Couldn't find any food for this UPC");
+  await expect(page.locator('#scan-lookup-result')).toHaveText('Barcode not found');
 });
 
 test('matching to an existing food adds it to the diary and proposes a UPC mapping', async ({ page }) => {
@@ -124,36 +136,13 @@ test('matching to an existing food adds it to the diary and proposes a UPC mappi
   });
 });
 
-test('"+ Create new food" prefills from a lookup hit', async ({ page }) => {
-  await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        name: 'Diet Cola',
-        upc: '049000028914',
-        servings: [{ name: 'can', quantity: 1, calories: 0, fat: 0, carbohydrates: 0, protein: 0 }]
-      })
-    });
-  });
-
-  await scanBarcode(page, '049000028914');
-  await expect(page.locator('#scan-lookup-result')).toHaveText('Diet Cola — 1 can, 0 cal');
-
-  await page.locator('#btn-scan-create-new-food').click();
-
-  await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
-  await expect(page.locator('#input-new-food-name')).toHaveValue('Diet Cola');
-  await expect(page.locator('#input-new-food-serving-name')).toHaveValue('can');
-  await expect(page.locator('#input-new-food-upc')).toHaveValue('049000028914');
-});
-
-test('"+ Create new food" prefills a blank name and just the UPC on a total miss', async ({ page }) => {
+test('"+ Create new food" prefills a blank name and just the UPC (the panel is only ever reached on a miss)', async ({ page }) => {
   await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
     route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) });
   });
 
   await scanBarcode(page, '049000028915');
-  await expect(page.locator('#scan-lookup-result')).toHaveText("Couldn't find any food for this UPC");
+  await expect(page.locator('#scan-lookup-result')).toHaveText('Barcode not found');
 
   await page.locator('#btn-scan-create-new-food').click();
 
@@ -231,4 +220,40 @@ test('left softkey returns to Search', async ({ page }) => {
   await pressSoftKey(page, 'SoftLeft');
 
   await expect(page.locator('#panel-search')).toHaveAttribute('active', 'true');
+});
+
+test('with "After I add a food" set to Modify servings, a lookup hit stops at the confirmation instead of auto-adding', async ({ page }) => {
+  // beforeEach already navigated Diary -> Search; back out to Diary to
+  // reach Options, then return the same way once the setting is flipped.
+  await pressSoftKey(page, 'SoftLeft');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await pressSoftKey(page, 'SoftRight');
+  await expect(page.locator('#panel-options')).toHaveAttribute('active', 'true');
+  await page.locator('#opt-after-add-food').click();
+  await expect(page.locator('#opt-after-add-food-value')).toHaveText('Modify servings');
+  await pressSoftKey(page, 'SoftLeft');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await goToSearchFromDiary(page);
+
+  await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        name: 'Diet Cola',
+        upc: '049000028930',
+        servings: [{ name: 'can', quantity: 1, calories: 0, fat: 0, carbohydrates: 0, protein: 0 }]
+      })
+    });
+  });
+
+  await scanBarcode(page, '049000028930');
+
+  await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
+  await expect(page.locator('#servings-panel-title')).toHaveText('Add to Diary');
+  await expect(page.locator('#servings-food-name')).toHaveText('Diet Cola');
+
+  await page.locator('#sk-center').click();
+
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.food-row-name')).toHaveText('Diet Cola');
 });

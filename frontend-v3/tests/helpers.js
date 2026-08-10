@@ -1,6 +1,20 @@
 const path = require('path');
 
-async function mockDataHost(page) {
+// `opts.afterAddFood` seeds the "After I add a food…" setting (app.js's
+// getAfterAddFood/'afterAddFood' localStorage key) before the app boots, via
+// addInitScript so it's in place before any of the app's own code runs.
+// Defaults to 'direct' (today's instant-add behavior) since that's what
+// every test written before that setting existed already assumes — pass
+// `{ afterAddFood: null }` to skip seeding entirely and exercise the app's
+// real default ('modify') instead, as after-add-food.spec.js does.
+async function mockDataHost(page, opts) {
+  opts = opts || {};
+  var afterAddFood = 'afterAddFood' in opts ? opts.afterAddFood : 'direct';
+  if (afterAddFood) {
+    await page.addInitScript(function (mode) {
+      localStorage.setItem('afterAddFood', mode);
+    }, afterAddFood);
+  }
   await page.route('https://calories.elliscode.com/manifest.json', function (route) {
     route.fulfill({ path: path.join(__dirname, 'fixtures/manifest.json') });
   });

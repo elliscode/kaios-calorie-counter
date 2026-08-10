@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.13">
-  <link rel="stylesheet" href="css/header.css?v=3.0.13">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.13">
-  <link rel="stylesheet" href="css/input.css?v=3.0.13">
-  <link rel="stylesheet" href="css/list.css?v=3.0.13">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.13">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.13">
+  <link rel="stylesheet" href="css/root.css?v=3.0.16">
+  <link rel="stylesheet" href="css/header.css?v=3.0.16">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.16">
+  <link rel="stylesheet" href="css/input.css?v=3.0.16">
+  <link rel="stylesheet" href="css/list.css?v=3.0.16">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.16">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.16">
 </head>
 <body>
   <div id="root">
@@ -135,7 +135,6 @@
           <label for="input-scan-upc">UPC</label>
         </div>
 
-        <span class="extra-serving-title">Product Lookup</span>
         <p id="scan-lookup-result" class="hint"></p>
 
         <span class="extra-serving-title">Match this barcode to an existing food</span>
@@ -366,6 +365,10 @@
             <span class="options-label">Show Caffeine</span>
             <span class="options-value" id="opt-show-caffeine-value"></span>
           </li>
+          <li class="options-row" id="opt-after-add-food" nav-selectable="true">
+            <span class="options-label">After I add a food…</span>
+            <span class="options-value" id="opt-after-add-food-value"></span>
+          </li>
           <li class="options-row" id="opt-meals-enabled" nav-selectable="true">
             <span class="options-label">Enable Meals</span>
             <span class="options-value" id="opt-meals-enabled-value"></span>
@@ -504,6 +507,6 @@
 
   </div>
   <script src="js/vendor/zxing.min.js"></script>
-  <script src="app.js?v=3.0.13"></script>
+  <script src="app.js?v=3.0.16"></script>
 </body>
 </html>

@@ -152,6 +152,26 @@ test('center/Enter steps through fields ("Next") and only submits from the Submi
   await expect(page.locator('.food-row-name')).toHaveText('protein muffin');
 });
 
+test('clicking a field moves the virtual cursor there too, so Enter advances from it, not from wherever it last was', async ({ page }) => {
+  await page.fill('#input-search', 'protein muffin');
+  await page.waitForTimeout(250);
+  await page.locator('#panel-search .search-row.add-new').click();
+  await expect(page.locator('#panel-new-food')).toHaveAttribute('active', 'true');
+  await expect(page.locator('#input-new-food-name')).toHaveAttribute('nav-selected', 'true');
+
+  // Click straight into Calories, well past Name/Qty/Serving — skipping the
+  // keyboard entirely, the way a mouse/touch user actually would.
+  await page.locator('#input-new-food-calories').click();
+  await expect(page.locator('#input-new-food-calories')).toHaveAttribute('nav-selected', 'true');
+  await expect(page.locator('#input-new-food-name')).not.toHaveAttribute('nav-selected', 'true');
+
+  // Enter must advance from Calories (Fat), not from Name (which would land
+  // back on Serving Size — the bug this test guards against).
+  await page.locator('#input-new-food-calories').fill('310');
+  await page.locator('#input-new-food-calories').press('Enter');
+  await expect(page.locator('#input-new-food-fat')).toHaveAttribute('nav-selected', 'true');
+});
+
 test('left softkey discards the form and returns to Search with its prior results intact', async ({ page }) => {
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);

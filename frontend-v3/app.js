@@ -17,7 +17,7 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.13';
+var APP_VERSION = '3.0.16';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
 var NON_NUTRIENT_KEYS = [
@@ -46,12 +46,6 @@ var state = {
   // showServingsPanel() / showRecipeIngredientQtyPanel() / showDiaryAddConfirmPanel().
   servingsMode: 'diary',
   recipeBuilder: null,
-  // The raw /lookup-upc result for the UPC currently shown on the Scan
-  // Result panel, if any — read by btn-scan-create-new-food's click
-  // handler to prefill showNewFoodPanel the same way "+ Create new food
-  // using this UPC" already does. null while a lookup is pending, or on a
-  // miss/error.
-  scanLookupFood: null,
   // {onComplete, onCancel} while panel-servings is open in 'diary-add'
   // mode — see showDiaryAddConfirmPanel/commitDiaryAdd. null otherwise.
   pendingDiaryAdd: null
@@ -165,6 +159,22 @@ function applyCaffeineVisibility() {
   if (rowSum) rowSum.style.display = display;
   if (rowServ) rowServ.style.display = display;
   if (rowRecipe) rowRecipe.style.display = display;
+}
+
+// ─── After I add a food… setting ────────────────────────────────────────
+// Independent of Meals/Require Meal Selection below — this is the general
+// "stop at the servings-confirmation screen every time" switch, usable with
+// Meals off entirely. 'modify' is the default — reviewing the serving
+// before it lands in the diary is the recommended flow; 'direct' is the
+// opt-out back to the old instant-add behavior.
+function getAfterAddFood() {
+  try { return localStorage.getItem('afterAddFood') === 'direct' ? 'direct' : 'modify'; } catch (e) { return 'modify'; }
+}
+
+function setAfterAddFood(mode) {
+  try { localStorage.setItem('afterAddFood', mode); } catch (e) { /* ignore */ }
+  setSettingsUpdatedAt(nowSec());
+  syncPreferences();
 }
 
 // ─── Meals setting ──────────────────────────────────────────────────────
@@ -292,12 +302,16 @@ function populateMealSelect(selectEl, selectedMealId, required) {
 // The seam every diary-add call site funnels through instead of calling
 // addFoodToDiaryDefault/addFoodToDiaryWithServing directly. The instant
 // branch is byte-for-byte what every call site already did before this
-// feature existed — Meals-off/Require-off behavior is unchanged.
+// feature existed — Meals-off/Require-off/"Return to diary" behavior is
+// unchanged. Two independent gates can force the confirmation screen: the
+// mandatory-meal-selection one (Meals + Require both on) and "After I add a
+// food… -> Modify servings" (getAfterAddFood) — either alone is enough.
 // `prefillServingName`/`prefillQuantity` non-null when the caller already
 // resolved a specific serving (UPC paths); null to prefill from
 // defaultServingForFood (search/Tray/new-food/recipe).
 function gateOrAddToDiary(food, prefillServingName, prefillQuantity, onComplete, onCancel) {
-  if (!(getMealsEnabled() && getRequireMealSelection())) {
+  var mealStepMandatory = getMealsEnabled() && getRequireMealSelection();
+  if (!mealStepMandatory && getAfterAddFood() !== 'modify') {
     if (prefillServingName) addFoodToDiaryWithServing(food, prefillServingName, prefillQuantity, onComplete, null);
     else addFoodToDiaryDefault(food, onComplete, null);
     return;
@@ -1237,6 +1251,9 @@ function applyPreferencesSyncMerge(merged, callback) {
     if (typeof merged.settings.requireMealSelection === 'boolean') {
       try { localStorage.setItem('requireMealSelection', String(merged.settings.requireMealSelection)); } catch (e) { /* ignore */ }
     }
+    if (merged.settings.afterAddFood === 'modify' || merged.settings.afterAddFood === 'direct') {
+      try { localStorage.setItem('afterAddFood', merged.settings.afterAddFood); } catch (e) { /* ignore */ }
+    }
     if (Array.isArray(merged.settings.meals)) {
       try {
         localStorage.setItem('meals', JSON.stringify(merged.settings.meals));
@@ -1291,6 +1308,7 @@ function syncPreferences(callback) {
           showCaffeine: getShowCaffeine(),
           mealsEnabled: getMealsEnabled(),
           requireMealSelection: getRequireMealSelection(),
+          afterAddFood: getAfterAddFood(),
           meals: getMeals(),
           updated: getSettingsUpdatedAt() || nowSec()
         },
@@ -1471,6 +1489,34 @@ function setFocus(el) {
   scrollToVisible(el);
   updateSoftkeysForFocus();
 }
+
+// A mouse/touch click on a real form control moves the browser's own focus
+// there, but not nav-selected (the "virtual cursor" Enter/center-key
+// advancement reads via focused()) — those are independent, and only
+// setFocus() (i.e. keyboard-driven navigation) ever touches nav-selected.
+// Without this, clicking around and then pressing Enter advances from
+// wherever nav-selected last was (e.g. the last field reached via
+// keyboard), not the field actually clicked. Delegated on 'focusin'
+// (bubbles, fires for any real focus change, not just a direct click —
+// covers Tab, programmatic .focus(), etc. too) rather than 'click' so it
+// stays correct regardless of how a field ends up focused.
+//
+// Deliberately does NOT call el.focus() the way setFocus() does — real
+// focus is already exactly where it needs to be, that's what triggered
+// this — and for a wrapped control (wireFocusForwardingWrapper: the
+// wrapper div is nav-selectable, not the inner <select>/date input),
+// calling .focus() on the wrapper here would yank real focus back off the
+// control the user just interacted with.
+document.addEventListener('focusin', function (e) {
+  var target = e.target && e.target.closest ? e.target.closest('[nav-selectable="true"]') : null;
+  if (!target || target === focused()) return;
+  var prev = focused();
+  if (prev) prev.removeAttribute('nav-selected');
+  target.setAttribute('nav-selected', 'true');
+  if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '0');
+  scrollToVisible(target);
+  updateSoftkeysForFocus();
+});
 
 function scrollToVisible(el) {
   var elRect = el.getBoundingClientRect();
@@ -2253,33 +2299,41 @@ function tryLocalUpcCandidates(candidates, i) {
 // ─── Screen: Scan Result ────────────────────────────────────────────────────
 //
 // Reached only from handleScannedUpc when a scanned UPC has no already-
-// resolved local mapping. Three independent things live here: (a) the
-// scanned code itself, editable in case of a misread digit; (b) a one-shot
-// /lookup-upc product-database check, purely informational; (c) a live
-// search over state.allFoods to match this barcode to an existing food
-// (mirrors #input-search/renderSearchResults); (d) a shortcut into New Food,
-// prefilled from the lookup if one hit. The UPC field is deliberately not
-// re-looked-up on edit — the lookup always reflects the code that was
-// actually scanned; an edited value only ever affects what gets sent by (c)
-// and (d) below.
+// resolved local mapping AND no /lookup-upc hit either — a hit is applied
+// immediately (see resolveRemoteUpcLookup below), exactly as if the user
+// had confirmed it themselves, so this panel only ever represents the
+// "barcode not found" case. Two things live here: (a) the scanned code
+// itself, editable in case of a misread digit; (b) a live search over
+// state.allFoods to match this barcode to an existing food (mirrors
+// #input-search/renderSearchResults); (c) a shortcut into New Food,
+// prefilled with just the UPC. The UPC field is deliberately not re-looked-
+// up on edit — an edited value only ever affects what gets sent by (b) and
+// (c) below.
 
 // `candidates` (see upcLookupCandidates) — the field is prefilled with the
 // first/most-preferred candidate (still fully editable), and the remote
 // lookup below tries every candidate in turn, not just that first one.
 function showScanResultPanel(candidates) {
-  state.scanLookupFood = null;
   document.getElementById('input-scan-upc').value = candidates[0];
   document.getElementById('scan-lookup-result').textContent = 'Looking up product…';
   document.getElementById('input-scan-match-search').value = '';
   renderScanMatchResults('');
   showPanel('panel-scan-result');
-  lookupUpcForScanResult(candidates, 0);
+  resolveRemoteUpcLookup(candidates, 0);
 }
 
-function lookupUpcForScanResult(candidates, i) {
+// A hit here is applied immediately via autoCreateFoodFromUpcLookup — the
+// same one-tap add already used for a UPC typed directly into the main
+// Search box (renderUpcSearchResult) — rather than making the user confirm
+// a match they just scanned. Only once every candidate has missed (no hit,
+// or a hit with no usable servings) does the panel surface as "Barcode not
+// found".
+function resolveRemoteUpcLookup(candidates, i) {
   if (i >= candidates.length) {
-    state.scanLookupFood = null;
-    document.getElementById('scan-lookup-result').textContent = "Couldn't find any food for this UPC";
+    var panel = activePanel();
+    if (panel && panel.id === 'panel-scan-result') {
+      document.getElementById('scan-lookup-result').textContent = 'Barcode not found';
+    }
     return;
   }
   xhrPostJson(LOOKUP_UPC_URL, { upc: candidates[i] }).then(function (res) {
@@ -2288,18 +2342,14 @@ function lookupUpcForScanResult(candidates, i) {
     // "re-check before touching the DOM" pattern renderUpcSearchResult uses.
     var panel = activePanel();
     if (!panel || panel.id !== 'panel-scan-result') return;
-    if (res.status === 200 && res.data) {
-      state.scanLookupFood = res.data;
-      var primary = (res.data.servings || [])[0];
-      var summary = res.data.name + (primary
-        ? (' — ' + formatQty(primary.quantity) + ' ' + primary.name + ', ' + Math.round(primary.calories || 0) + ' cal')
-        : '');
-      document.getElementById('scan-lookup-result').textContent = summary;
+    var hit = res.status === 200 && res.data && res.data.servings && res.data.servings.length;
+    if (hit) {
+      autoCreateFoodFromUpcLookup(candidates[i], res.data);
     } else {
-      lookupUpcForScanResult(candidates, i + 1);
+      resolveRemoteUpcLookup(candidates, i + 1);
     }
   }).catch(function () {
-    lookupUpcForScanResult(candidates, i + 1);
+    resolveRemoteUpcLookup(candidates, i + 1);
   });
 }
 
@@ -2381,13 +2431,13 @@ function commitMatchedFoodToDiaryAndProposeMapping(food, serving, upc) {
   });
 }
 
+// This panel is only ever reached on a total miss (see showScanResultPanel/
+// resolveRemoteUpcLookup above), so there's never lookup data to prefill
+// from — identical prefill shape to the blank "+ Add new food" row
+// (renderSearchResults) elsewhere, just with the UPC carried over.
 document.getElementById('btn-scan-create-new-food').addEventListener('click', function () {
   var upc = document.getElementById('input-scan-upc').value.trim();
-  var lookupFood = state.scanLookupFood;
-  // Identical prefill shape to "+ Create new food using this UPC"
-  // (renderUpcSearchResult) when a lookup hit exists, and to the blank
-  // "+ Add new food" total-miss row (renderSearchResults) otherwise.
-  showNewFoodPanel(lookupFood ? { name: lookupFood.name || '', upc: upc, servings: lookupFood.servings } : { name: '', upc: upc });
+  showNewFoodPanel({ name: '', upc: upc });
 });
 
 function trayHasFood(id) {
@@ -2818,11 +2868,13 @@ function showRecipeIngredientQtyPanel(food) {
   setSoftkeys('Back', 'Add', '');
 }
 
-// Opened only when gateOrAddToDiary() decides confirmation is mandatory
-// (getMealsEnabled() && getRequireMealSelection()). Mirrors
-// showRecipeIngredientQtyPanel's shape — same shared panel/fields, no
-// backing diary row (state.editingEntry stays null) — but commits straight
-// to the diary via commitDiaryAdd() instead of the recipe builder.
+// Opened whenever gateOrAddToDiary() decides confirmation is needed — either
+// the mandatory-meal gate (getMealsEnabled() && getRequireMealSelection())
+// or "After I add a food… -> Modify servings" (getAfterAddFood()), so the
+// meal field below can't assume it's always on/required the way it used to.
+// Mirrors showRecipeIngredientQtyPanel's shape — same shared panel/fields,
+// no backing diary row (state.editingEntry stays null) — but commits
+// straight to the diary via commitDiaryAdd() instead of the recipe builder.
 // prefillServingName/prefillQuantity are non-null when the caller already
 // resolved a specific serving (UPC paths); null to prefill from
 // defaultServingForFood's last-used guess.
@@ -2851,10 +2903,12 @@ function showDiaryAddConfirmPanel(food, prefillServingName, prefillQuantity, onC
     select.appendChild(opt);
   });
 
-  // This panel only ever opens when Meals + Require are both on, so the
-  // meal field is always shown and required here.
-  applyMealFieldVisibility('wrap-diary-meal', true);
-  populateMealSelect(document.getElementById('input-meal'), null, true);
+  // Same conditional shape showServingsPanel (edit-entry) already uses —
+  // this panel can now open with Meals off, so the meal field can't be
+  // unconditionally shown/required any more.
+  var mealsOn = getMealsEnabled();
+  applyMealFieldVisibility('wrap-diary-meal', mealsOn);
+  if (mealsOn) populateMealSelect(document.getElementById('input-meal'), null, getRequireMealSelection());
 
   renderServingsPreview();
   setSoftkeys('Back', 'Add', '');
@@ -2863,11 +2917,14 @@ function showDiaryAddConfirmPanel(food, prefillServingName, prefillQuantity, onC
 function commitDiaryAdd() {
   var qty = parseFloat(document.getElementById('input-serving-qty').value) || 0;
   var baseline = currentServingBaseline();
-  var mealSelect = document.getElementById('input-meal');
   if (!baseline || !qty) { showStatus('Enter a quantity', true); return; }
-  if (mealSelect.value === '__unset__') { showStatus('Select a meal', true); return; }
+  // Meals off — this select was never populated (see showDiaryAddConfirmPanel
+  // above), same "feature off, no-op" treatment saveServingsEdit gives it.
+  var mealsOn = getMealsEnabled();
+  var mealSelect = document.getElementById('input-meal');
+  if (mealsOn && mealSelect.value === '__unset__') { showStatus('Select a meal', true); return; }
   var pending = state.pendingDiaryAdd;
-  var mealId = mealSelect.value || null;
+  var mealId = mealsOn ? (mealSelect.value || null) : null;
   addFoodToDiaryWithServing(state.editingFood, baseline.name, qty, function (newId) {
     state.pendingDiaryAdd = null;
     // Deliberately no showDiaryPanel() here — navigation is the caller's
@@ -3814,6 +3871,7 @@ function refreshOptionsAccountRow() {
 function showOptionsPanel() {
   document.getElementById('opt-version').textContent = APP_VERSION;
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
+  document.getElementById('opt-after-add-food-value').textContent = getAfterAddFood() === 'modify' ? 'Modify servings' : 'Return to diary';
   document.getElementById('opt-meals-enabled-value').textContent = getMealsEnabled() ? 'On' : 'Off';
   document.getElementById('opt-require-meal-selection-value').textContent = getRequireMealSelection() ? 'On' : 'Off';
   applyMealsVisibility();
@@ -3893,6 +3951,11 @@ document.getElementById('opt-my-foods').addEventListener('click', showMyFoodsPan
 document.getElementById('opt-show-caffeine').addEventListener('click', function () {
   setShowCaffeine(!getShowCaffeine());
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
+});
+
+document.getElementById('opt-after-add-food').addEventListener('click', function () {
+  setAfterAddFood(getAfterAddFood() === 'modify' ? 'direct' : 'modify');
+  document.getElementById('opt-after-add-food-value').textContent = getAfterAddFood() === 'modify' ? 'Modify servings' : 'Return to diary';
 });
 
 document.getElementById('opt-meals-enabled').addEventListener('click', function () {
