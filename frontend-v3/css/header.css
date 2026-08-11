@@ -106,15 +106,12 @@
 
   /* .auth-status-text/.auth-dot sit at the far right of .header's normal
      flex flow — exactly where #topbar-accept is now fixed on top of them.
-     Drop the text (redundant with Options' own login row) and reserve
-     enough right padding that the dot alone lands clear of the button
-     instead of underneath/behind it. */
+     Reserving right padding shrinks the flex content area so both stay
+     clear of the button instead of rendering underneath/behind it — <h1>
+     (flex:1, the only shrinkable flex child here) absorbs the difference,
+     same as it already does around the fixed-width scan button elsewhere. */
   .header {
     padding-right: 64px;
-  }
-
-  .auth-status-text {
-    display: none;
   }
 }
 

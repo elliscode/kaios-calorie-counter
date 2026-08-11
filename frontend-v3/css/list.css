@@ -27,6 +27,7 @@ body.dark .list-row-empty {
   font-size: 13px;
   cursor: pointer;
   outline: none;
+  background-color: #f5f7f3;
 }
 
 .food-row-name {
@@ -54,37 +55,6 @@ body.dark .list-row-empty {
 .food-row[nav-selected="true"] {
   background: #388E3C;
   color: #fff;
-}
-
-/* ─── Swipe-to-delete (>240px touchscreen UI only) ───────────────────────
-   #diary-row-delete-reveal (see index.html) is one shared button
-   repositioned by wireDiarySwipeToDelete (app.js) over whichever row is
-   mid-drag. It's a sibling of #diary-ul, not a descendant, so it's
-   position:fixed and placed via the row's getBoundingClientRect() (already
-   viewport-relative) rather than position:absolute against an ancestor it
-   doesn't actually have. .food-row itself gets a translateX() transform
-   while dragging/open — the transition here is what makes the open/closed
-   snap feel deliberate rather than instant. */
-.food-row {
-  transition: transform 0.15s ease-out;
-}
-
-#diary-row-delete-reveal {
-  display: none;
-  position: fixed;
-  border: none;
-  background: #c0392b;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  z-index: 15;
-}
-
-@media (min-width: 241px) {
-  #diary-row-delete-reveal.revealed {
-    display: block;
-  }
 }
 
 .food-row[nav-selected="true"] .food-row-serving {

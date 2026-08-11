@@ -5,14 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Calorie Counter</title>
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.16">
-  <link rel="stylesheet" href="css/header.css?v=3.0.16">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.16">
-  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.16">
-  <link rel="stylesheet" href="css/input.css?v=3.0.16">
-  <link rel="stylesheet" href="css/list.css?v=3.0.16">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.16">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.16">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://calories.elliscode.com/">
+  <meta property="og:title" content="KaiOS Calorie Counter">
+  <meta property="og:description" content="Track your daily intake across devices">
+  <meta property="og:image" content="https://calories.elliscode.com/img/banner-og.png">
+
+  <link rel="stylesheet" href="css/root.css?v=3.0.29">
+  <link rel="stylesheet" href="css/header.css?v=3.0.29">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.29">
+  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.29">
+  <link rel="stylesheet" href="css/input.css?v=3.0.29">
+  <link rel="stylesheet" href="css/list.css?v=3.0.29">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.29">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.29">
 </head>
 <body>
   <div id="root">
@@ -52,16 +58,9 @@
       </div>
       <div class="panel-content">
         <button id="btn-diary-add-food" class="search-row add-new" type="button" nav-selectable="true">+ Add Food</button>
+
         <ul id="diary-ul" class="item-list"></ul>
         <p id="diary-empty" class="hint" style="display:none">Nothing logged for this day.</p>
-
-        <!-- Swipe-to-delete reveal button (>240px touchscreen UI only) — one
-             shared element repositioned over whichever #diary-ul row is
-             currently being dragged, rather than one baked into every row's
-             own markup (see wireDiarySwipeToDelete in app.js). Inert at
-             ≤240px: no touch/drag handling runs below that width, and
-             css/list.css keeps it display:none there regardless. -->
-        <button id="diary-row-delete-reveal" type="button">Delete</button>
 
         <div class="summary-table" id="diary-summary">
           <div class="summary-row">
@@ -214,6 +213,15 @@
         </div>
 
         <div class="nutrient-table" id="servings-nutrients"></div>
+
+        <!-- >240px touchscreen UI only — #sk-right's "Delete" softkey is
+             hidden at this width along with the rest of #softkey, so
+             deleting an entry needs an on-screen equivalent here. Shown
+             only in 'diary' mode (state.servingsMode) — matches
+             handleSoftRight()'s own gating in app.js, since 'recipe-
+             ingredient'/'diary-add' modes don't back a real diary entry to
+             delete. -->
+        <button id="btn-servings-delete" class="secondary-button danger" type="button" nav-selectable="true">Delete</button>
       </div>
     </div>
 
@@ -562,6 +570,6 @@
 
   </div>
   <script src="js/vendor/zxing.min.js"></script>
-  <script src="app.js?v=3.0.16"></script>
+  <script src="app.js?v=3.0.29"></script>
 </body>
 </html>

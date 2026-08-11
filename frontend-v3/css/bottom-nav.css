@@ -13,16 +13,7 @@
   bottom: 0;
   height: 76px;
   padding: 8px 24px;
-  align-items: center;
-  justify-content: space-between;
-  background: #fff;
-  border-top: 1px solid #ddd;
   z-index: 20;
-}
-
-body.dark #diary-bottom-nav {
-  background: #1e1e1e;
-  border-top-color: #444;
 }
 
 #btn-diary-add-food {
@@ -32,6 +23,12 @@ body.dark #diary-bottom-nav {
 @media (min-width: 241px) {
   #diary-bottom-nav {
     display: flex;
+    background-color: transparent;
+    border: none;
+    align-items: flex-end;
+    justify-content: center;
+    margin-bottom: 0;
+    padding-bottom: 0;
   }
 
   #btn-diary-add-food {
@@ -43,15 +40,16 @@ body.dark #diary-bottom-nav {
      #sheet-overlay's bottom offset to clear #softkey today. */
   #panel-diary .panel-content {
     padding-bottom: 84px;
+    overflow-x: hidden;
   }
 }
 
 #btn-bottom-nav-foods,
 #btn-bottom-nav-settings {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
-  border: none;
+  border: 1px solid #2E7D32;
   background: #f0f0f0;
   color: #2E7D32;
   font-size: 20px;

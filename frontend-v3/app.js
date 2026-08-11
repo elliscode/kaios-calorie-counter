@@ -17,7 +17,7 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.16';
+var APP_VERSION = '3.0.29';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
 var NON_NUTRIENT_KEYS = [
@@ -920,11 +920,14 @@ function setLastManifestCheck(timestamp) {
 // `now` explicitly (rather than reading `new Date()` internally) keeps
 // this a pure, easily-testable function.
 function mostRecentTuesday8am(now) {
-  var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 0, 0, 0);
-  var daysSinceTuesday = (d.getDay() - 2 + 7) % 7; // getDay(): 0=Sun, 2=Tue
-  d.setDate(d.getDate() - daysSinceTuesday);
-  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7); // it's Tuesday but before 8am
-  return d.getTime();
+  // var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 0, 0, 0);
+  // var daysSinceTuesday = (d.getDay() - 2 + 7) % 7; // getDay(): 0=Sun, 2=Tue
+  // d.setDate(d.getDate() - daysSinceTuesday);
+  // if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7); // it's Tuesday but before 8am
+  // return d.getTime();
+
+  // TODO: forcing this to always refresh for now
+  return (new Date()).getTime();
 }
 
 function shouldCheckManifest(hasAnySyncedFiles, now) {
@@ -1939,118 +1942,9 @@ function buildDiaryRow(entry) {
   li.appendChild(name);
   li.appendChild(serving);
   li.appendChild(cal);
-  li.addEventListener('click', function () {
-    // A tap on an already-swiped-open row (>240px touchscreen UI, see
-    // wireDiarySwipeToDelete below) closes it instead of opening Servings —
-    // covers both the synthetic click a touch tap generates after
-    // touchend, and a plain mouse click landing on an already-open row.
-    if (li.classList.contains('swiped-open')) { closeDiarySwipeRow(li); return; }
-    showServingsPanel(entry);
-  });
+  li.addEventListener('click', function () { showServingsPanel(entry); });
   return li;
 }
-
-// ─── Diary row swipe-to-delete (>240px touchscreen UI only) ────────────────
-//
-// Reveal-then-tap: dragging a row left reveals #diary-row-delete-reveal
-// (one shared button, repositioned over whichever row is mid-drag rather
-// than duplicated per-row) behind it; tapping that button deletes via
-// deleteDiaryEntry (shared with deleteCurrentEntry's panel-servings path).
-// No swipe/drag interaction exists anywhere else in this app — scoped
-// specifically to #diary-ul per the plan. `_diarySwipeState` is the
-// current touch gesture, if any; `_diarySwipeOpenRow` is whichever single
-// row (if any) is left open between gestures.
-var _diarySwipeState = null;
-var _diarySwipeOpenRow = null;
-var DIARY_SWIPE_REVEAL_WIDTH = 72;
-
-function openDiarySwipeRow(row) {
-  row.classList.add('swiped-open');
-  row.style.transform = 'translateX(-' + DIARY_SWIPE_REVEAL_WIDTH + 'px)';
-  _diarySwipeOpenRow = row;
-}
-
-function closeDiarySwipeRow(row) {
-  row.classList.remove('swiped-open');
-  row.style.transform = 'translateX(0)';
-  document.getElementById('diary-row-delete-reveal').classList.remove('revealed');
-  if (_diarySwipeOpenRow === row) _diarySwipeOpenRow = null;
-}
-
-function wireDiarySwipeToDelete() {
-  var ul = document.getElementById('diary-ul');
-  var revealBtn = document.getElementById('diary-row-delete-reveal');
-
-  ul.addEventListener('touchstart', function (e) {
-    // Inert at ≤240px — KaiOS has no touchscreen, and this keeps the
-    // gesture from ever engaging there even if a touch event somehow
-    // fires, per "new HTML/behavior stays disabled at 240px".
-    if (!window.matchMedia('(min-width: 241px)').matches) return;
-    var row = e.target.closest('.food-row');
-    if (!row) return;
-    if (_diarySwipeOpenRow && _diarySwipeOpenRow !== row) closeDiarySwipeRow(_diarySwipeOpenRow);
-    var touch = e.touches[0];
-    _diarySwipeState = { row: row, startX: touch.clientX, startY: touch.clientY, dragging: false, lastOffset: 0 };
-  }, { passive: true });
-
-  ul.addEventListener('touchmove', function (e) {
-    if (!_diarySwipeState) return;
-    var touch = e.touches[0];
-    var dx = touch.clientX - _diarySwipeState.startX;
-    var dy = touch.clientY - _diarySwipeState.startY;
-    if (!_diarySwipeState.dragging) {
-      // Only claim the gesture once it's clearly horizontal — otherwise
-      // leave touchmove alone so vertical scrolling of the list still works.
-      if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
-      _diarySwipeState.dragging = true;
-      revealBtn.classList.add('revealed');
-      // #diary-row-delete-reveal is a sibling of #diary-ul, not a
-      // descendant (see css/list.css) — position:fixed + a viewport-
-      // relative rect is what actually lines it up with the row, unlike
-      // offsetTop/offsetHeight (relative to an ancestor it doesn't have).
-      var rect = _diarySwipeState.row.getBoundingClientRect();
-      revealBtn.style.top = rect.top + 'px';
-      revealBtn.style.left = (rect.right - DIARY_SWIPE_REVEAL_WIDTH) + 'px';
-      revealBtn.style.height = rect.height + 'px';
-      revealBtn.style.width = DIARY_SWIPE_REVEAL_WIDTH + 'px';
-    }
-    var base = (_diarySwipeOpenRow === _diarySwipeState.row) ? -DIARY_SWIPE_REVEAL_WIDTH : 0;
-    var offset = Math.min(0, Math.max(-DIARY_SWIPE_REVEAL_WIDTH, base + dx));
-    _diarySwipeState.row.style.transform = 'translateX(' + offset + 'px)';
-    _diarySwipeState.lastOffset = offset;
-  }, { passive: true });
-
-  ul.addEventListener('touchend', function () {
-    if (!_diarySwipeState) return;
-    if (_diarySwipeState.dragging) {
-      if (_diarySwipeState.lastOffset <= -DIARY_SWIPE_REVEAL_WIDTH / 2) openDiarySwipeRow(_diarySwipeState.row);
-      else closeDiarySwipeRow(_diarySwipeState.row);
-    }
-    // A plain tap (never dragged) falls through to the row's own click
-    // listener above, which already handles both "open Servings" and
-    // "close an already-open row" — nothing extra needed here for that case.
-    _diarySwipeState = null;
-  });
-
-  revealBtn.addEventListener('click', function () {
-    var row = _diarySwipeOpenRow;
-    if (!row) return;
-    // data-entry-id (an HTML attribute) is always a string; entry.id isn't
-    // necessarily one (IndexedDB auto-increment keys are numbers) — compare
-    // as strings on both sides rather than relying on ===.
-    var entryId = row.getAttribute('data-entry-id');
-    var entry = state.diaryEntries.filter(function (e) { return String(e.id) === entryId; })[0];
-    closeDiarySwipeRow(row);
-    if (!entry) return;
-    deleteDiaryEntry(entry, function () {
-      showStatus('Deleted', false);
-      syncAfterDiaryMutation();
-      renderDiary();
-    });
-  });
-}
-
-wireDiarySwipeToDelete();
 
 // Buckets entries into getMeals()'s order, plus a trailing "Other" group for
 // anything with no mealId or one pointing at a since-deleted meal — the
@@ -2825,6 +2719,7 @@ function showServingsPanel(entry) {
   state.editingEntry = entry;
   state.editingFood = state.foodsById[entry.foodId] || null;
 
+  document.getElementById('btn-servings-delete').classList.remove('mode-hidden');
   showPanel('panel-servings');
   document.getElementById('servings-panel-title').textContent = 'Edit Serving';
   document.getElementById('servings-food-name').textContent = entry.foodName;
@@ -3005,6 +2900,7 @@ function showRecipeIngredientQtyPanel(food) {
   state.editingFood = food;
   state.editingEntry = null;
 
+  document.getElementById('btn-servings-delete').classList.add('mode-hidden');
   showPanel('panel-servings');
   document.getElementById('servings-panel-title').textContent = 'Ingredient Quantity';
   document.getElementById('servings-food-name').textContent = food.name;
@@ -3047,6 +2943,7 @@ function showDiaryAddConfirmPanel(food, prefillServingName, prefillQuantity, onC
   state.editingEntry = null;
   state.pendingDiaryAdd = { onComplete: onComplete, onCancel: onCancel };
 
+  document.getElementById('btn-servings-delete').classList.add('mode-hidden');
   showPanel('panel-servings');
   document.getElementById('servings-panel-title').textContent = 'Add to Diary';
   document.getElementById('servings-food-name').textContent = food.name;
@@ -3153,6 +3050,11 @@ function deleteCurrentEntry() {
     syncAfterDiaryMutation();
   });
 }
+
+// >240px touchscreen UI's on-screen equivalent of #sk-right's "Delete"
+// softkey (hidden at that width along with the rest of #softkey) — see
+// index.html's comment above #btn-servings-delete for the mode-gating.
+document.getElementById('btn-servings-delete').addEventListener('click', deleteCurrentEntry);
 
 // ─── Screen: New Food ─────────────────────────────────────────────────────────
 

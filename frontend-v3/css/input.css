@@ -197,6 +197,42 @@ body.dark .secondary-button[nav-selected="true"] {
   box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.35);
 }
 
+/* Destructive-action variant — same shape as .secondary-button, red instead
+   of green, matching this app's existing red-for-danger convention
+   (.options-row-danger, .scan-error, .remove-serving-btn). */
+.secondary-button.danger {
+  color: #c0392b;
+  border-color: #c0392b;
+}
+
+.secondary-button.danger[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.3);
+}
+
+body.dark .secondary-button.danger {
+  color: #e57373;
+  border-color: #e57373;
+}
+
+body.dark .secondary-button.danger[nav-selected="true"] {
+  box-shadow: 0 0 0 3px rgba(229, 115, 115, 0.35);
+}
+
+/* #btn-servings-delete: >240px-only (mirrors every other new touchscreen-UI
+   affordance's base-hidden/media-shown convention) AND mode-gated — the
+   .mode-hidden class (toggled in app.js's show*Panel functions per
+   state.servingsMode) additionally hides it outside 'diary' mode, where
+   there's no real diary entry backing this screen to delete. */
+#btn-servings-delete {
+  display: none;
+}
+
+@media (min-width: 241px) {
+  #btn-servings-delete:not(.mode-hidden) {
+    display: block;
+  }
+}
+
 .extra-serving-block {
   margin: 20px 4px 0;
   padding-top: 12px;

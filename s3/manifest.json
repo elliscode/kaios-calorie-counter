@@ -1,6 +1,8 @@
 {
   "files": [
     { "id": "2026-08-06-approved-foods", "url": "/2026-08-06-approved-foods.json" },
-    { "id": "2026-08-06-upc-mappings", "type": "upc-mappings", "url": "/2026-08-06-upc-mappings.json" }
+    { "id": "2026-08-06-upc-mappings", "type": "upc-mappings", "url": "/2026-08-06-upc-mappings.json" },
+    { "id": "2026-08-11-approved-foods", "url": "/2026-08-06-approved-foods.json" },
+    { "id": "2026-08-11-upc-mappings", "type": "upc-mappings", "url": "/2026-08-06-upc-mappings.json" }
   ]
 }

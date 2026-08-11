@@ -102,62 +102,37 @@ test('at 240px (KaiOS width) the highlight is always visible regardless of prior
   await expect(firstRow).toHaveCSS('background-color', 'rgb(56, 142, 60)');
 });
 
-test.describe('diary row swipe-to-delete', () => {
-  test.use({ viewport: { width: 241, height: 700 }, hasTouch: true });
+test('#btn-servings-delete is the >240px on-screen equivalent of #sk-right\'s Delete, and only shows for a real diary entry', async ({ page }) => {
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'apple');
+  await page.waitForTimeout(250);
+  await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();
+  await expect(page.locator('.food-row-name')).toHaveText('Apple, Raw');
 
-  test('dragging a diary row left reveals Delete; tapping it removes the entry', async ({ page }) => {
-    await goToSearchFromDiary(page);
-    await page.fill('#input-search', 'apple');
-    await page.waitForTimeout(250);
-    await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();
-    await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
-    await expect(page.locator('.food-row-name')).toHaveText('Apple, Raw');
+  await page.locator('.food-row').click();
+  await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
+  await expect(page.locator('#btn-servings-delete')).toBeVisible();
 
-    var box = await page.locator('.food-row').boundingBox();
+  await page.locator('#btn-servings-delete').click();
 
-    await page.evaluate(function (box) {
-      var el = document.querySelector('.food-row');
-      function touchAt(x, y) {
-        return new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
-      }
-      var y = box.y + box.height / 2;
-      var startX = box.x + box.width - 10;
-      el.dispatchEvent(new TouchEvent('touchstart', { touches: [touchAt(startX, y)], bubbles: true }));
-      el.dispatchEvent(new TouchEvent('touchmove', { touches: [touchAt(startX - 80, y)], bubbles: true }));
-      el.dispatchEvent(new TouchEvent('touchend', { touches: [], bubbles: true }));
-    }, box);
-
-    await expect(page.locator('#diary-row-delete-reveal')).toBeVisible();
-    await page.locator('#diary-row-delete-reveal').click();
-
-    await expect(page.locator('#diary-empty')).toBeVisible();
-    await expect(page.locator('.food-row')).toHaveCount(0);
-  });
-
-  test('a short drag that stays below the reveal threshold snaps back closed, and tapping the row still opens Servings', async ({ page }) => {
-    await goToSearchFromDiary(page);
-    await page.fill('#input-search', 'apple');
-    await page.waitForTimeout(250);
-    await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();
-    await expect(page.locator('.food-row-name')).toHaveText('Apple, Raw');
-
-    var box = await page.locator('.food-row').boundingBox();
-
-    await page.evaluate(function (box) {
-      var el = document.querySelector('.food-row');
-      function touchAt(x, y) {
-        return new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
-      }
-      var y = box.y + box.height / 2;
-      var startX = box.x + box.width - 10;
-      el.dispatchEvent(new TouchEvent('touchstart', { touches: [touchAt(startX, y)], bubbles: true }));
-      el.dispatchEvent(new TouchEvent('touchmove', { touches: [touchAt(startX - 20, y)], bubbles: true }));
-      el.dispatchEvent(new TouchEvent('touchend', { touches: [], bubbles: true }));
-    }, box);
-
-    await expect(page.locator('#diary-row-delete-reveal')).toBeHidden();
-
-    await page.locator('.food-row').click();
-    await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
-  });
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.status-toast')).toHaveText('Deleted');
+  await expect(page.locator('.food-row')).toHaveCount(0);
 });
+
+test('#btn-servings-delete is hidden when panel-servings has no real diary entry backing it (recipe-ingredient mode)', async ({ page }) => {
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'zzz-nonexistent');
+  await page.waitForTimeout(250);
+  await page.locator('#panel-search .search-row.add-new-recipe').click();
+  await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+
+  await page.locator('#btn-recipe-add-ingredient').click();
+  await page.fill('#input-search', 'apple');
+  await page.waitForTimeout(250);
+  await page.locator('.search-row', { hasText: 'Apple, Raw' }).click();
+
+  await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
+  await expect(page.locator('#btn-servings-delete')).toBeHidden();
+});
+
