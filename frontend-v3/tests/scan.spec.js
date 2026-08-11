@@ -252,7 +252,8 @@ test('with "After I add a food" set to Modify servings, a lookup hit stops at th
   await expect(page.locator('#servings-panel-title')).toHaveText('Add to Diary');
   await expect(page.locator('#servings-food-name')).toHaveText('Diet Cola');
 
-  await page.locator('#sk-center').click();
+  // #softkey is hidden at this width — #topbar-accept is its replacement.
+  await page.locator('#topbar-accept').click();
 
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
   await expect(page.locator('.food-row-name')).toHaveText('Diet Cola');

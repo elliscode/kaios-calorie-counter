@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="css/root.css?v=3.0.16">
   <link rel="stylesheet" href="css/header.css?v=3.0.16">
   <link rel="stylesheet" href="css/softkey.css?v=3.0.16">
+  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.16">
   <link rel="stylesheet" href="css/input.css?v=3.0.16">
   <link rel="stylesheet" href="css/list.css?v=3.0.16">
   <link rel="stylesheet" href="css/sheet.css?v=3.0.16">
@@ -54,6 +55,14 @@
         <ul id="diary-ul" class="item-list"></ul>
         <p id="diary-empty" class="hint" style="display:none">Nothing logged for this day.</p>
 
+        <!-- Swipe-to-delete reveal button (>240px touchscreen UI only) — one
+             shared element repositioned over whichever #diary-ul row is
+             currently being dragged, rather than one baked into every row's
+             own markup (see wireDiarySwipeToDelete in app.js). Inert at
+             ≤240px: no touch/drag handling runs below that width, and
+             css/list.css keeps it display:none there regardless. -->
+        <button id="diary-row-delete-reveal" type="button">Delete</button>
+
         <div class="summary-table" id="diary-summary">
           <div class="summary-row">
             <span class="summary-label">Total Calories</span>
@@ -80,6 +89,19 @@
         <div class="input-wrap" id="wrap-diary-date" nav-selectable="true">
           <input id="input-diary-date" type="date">
           <label for="input-diary-date">Date</label>
+        </div>
+
+        <!-- Diary bottom nav (>240px touchscreen UI only, see
+             css/bottom-nav.css) — replaces #btn-diary-add-food (hidden at
+             this width) rather than duplicating it; the center Add button
+             calls the exact same showSearchPanel action. Settings/My Foods
+             cover what the hidden #sk-right ("Options") softkey and
+             Options' own My Foods/My Recipes rows already did — see
+             app.js's btn-bottom-nav-* listeners. -->
+        <div id="diary-bottom-nav">
+          <button id="btn-bottom-nav-foods" type="button" nav-selectable="true" aria-label="My Foods">&#127869;</button>
+          <button id="btn-bottom-nav-add" type="button" nav-selectable="true" aria-label="Add Food">+</button>
+          <button id="btn-bottom-nav-settings" type="button" nav-selectable="true" aria-label="Settings">&#9881;</button>
         </div>
       </div>
     </div>
@@ -392,6 +414,26 @@
       </div>
     </div>
 
+    <!-- Panel: Foods & Recipes — reached only from the Diary bottom nav's
+         My Foods button (>240px touchscreen UI, see css/bottom-nav.css).
+         A thin chooser, not a merged list: each button opens the existing
+         panel-my-foods/panel-my-recipes screens below unchanged. Back from
+         either of those needs to return here (not Options) when reached
+         this way — see state.myFoodsBackTo in app.js. -->
+    <div id="panel-foods-recipes" class="panel" active="false">
+      <div class="header">
+        <h1>Foods &amp; Recipes</h1>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <div id="foods-recipes-chooser">
+          <button id="btn-foods-recipes-foods" type="button" nav-selectable="true">Foods</button>
+          <button id="btn-foods-recipes-recipes" type="button" nav-selectable="true">Recipes</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Panel: My Foods (nested under Options) -->
     <div id="panel-my-foods" class="panel" active="false">
       <div class="header">
@@ -504,6 +546,19 @@
       <label id="sk-center"></label>
       <label id="sk-right"></label>
     </div>
+
+    <!-- Top bar Back/Accept — the >240px touchscreen-UI equivalent of
+         #sk-left/#sk-center above (hidden at that width via softkey.css).
+         One global pair, not per-panel, exactly mirroring how #softkey
+         itself is one global bar whose label/action already changes with
+         the active panel — see updateSoftkeysForFocus()/handleSoftLeft()/
+         handleSoftCenter() in app.js. Icons are static (a consistent "back"
+         and "accept" affordance); aria-label mirrors #sk-left/#sk-center's
+         current text for the actual per-panel meaning ("Back" vs "Cancel",
+         "Save" vs "Submit" vs "Verify", etc). display:none by default
+         (css/header.css), shown only at min-width:241px. -->
+    <button id="topbar-back" type="button" aria-label="Back">&#8592;</button>
+    <button id="topbar-accept" type="button" aria-label="Accept">&#10003;</button>
 
   </div>
   <script src="js/vendor/zxing.min.js"></script>

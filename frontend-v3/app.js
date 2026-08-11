@@ -48,7 +48,13 @@ var state = {
   recipeBuilder: null,
   // {onComplete, onCancel} while panel-servings is open in 'diary-add'
   // mode — see showDiaryAddConfirmPanel/commitDiaryAdd. null otherwise.
-  pendingDiaryAdd: null
+  pendingDiaryAdd: null,
+  // Where handleSoftLeft() sends Back from panel-my-foods/panel-my-recipes
+  // — 'options' (the only route at ≤240px) unless the new >240px Foods &
+  // Recipes chooser (panel-foods-recipes) was the one that opened it.
+  // Options' own My Foods/My Recipes rows reset this to 'options' on every
+  // click so stale state from an earlier chooser visit can't leak in.
+  myFoodsBackTo: 'options'
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -1383,14 +1389,39 @@ function showPanel(id) {
   var panel = document.getElementById(id);
   panel.setAttribute('active', 'true');
   window.scrollTo(0, 0);
-  var first = panel.querySelector('[nav-selectable="true"]');
+  // isVisible() filter matters now that some nav-selectable elements are
+  // conditionally hidden at the current width (e.g. #btn-diary-add-food
+  // vs. the >240px Diary bottom nav) — without it, this could focus (and
+  // report as the active softkey/top-bar action) an element the user can't
+  // actually see or interact with.
+  var candidates = panel.querySelectorAll('[nav-selectable="true"]');
+  var first = null;
+  for (var j = 0; j < candidates.length; j++) {
+    if (isVisible(candidates[j])) { first = candidates[j]; break; }
+  }
   if (first) setFocus(first);
 }
 
+// #topbar-back/#topbar-accept (the >240px touchscreen UI's Back/Accept —
+// see index.html) are kept in sync here rather than at each of
+// setSoftkeys()'s many call sites: whenever there's no left/center softkey
+// action for the current panel/sheet state, there's nothing for the
+// matching top-bar button to do either, so it's hidden the same way
+// (.topbar-btn-empty, see css/header.css). aria-label mirrors the actual
+// action text ("Back" vs "Cancel", "Save" vs "Submit" vs "Verify", etc.)
+// since the icon itself stays generic/static.
 function setSoftkeys(left, center, right) {
   document.getElementById('sk-left').textContent = left;
   document.getElementById('sk-center').textContent = center;
   document.getElementById('sk-right').textContent = right;
+
+  var backBtn = document.getElementById('topbar-back');
+  backBtn.classList.toggle('topbar-btn-empty', !left);
+  if (left) backBtn.setAttribute('aria-label', left);
+
+  var acceptBtn = document.getElementById('topbar-accept');
+  acceptBtn.classList.toggle('topbar-btn-empty', !center);
+  if (center) acceptBtn.setAttribute('aria-label', center);
 }
 
 function updateSoftkeysForFocus() {
@@ -1400,7 +1431,12 @@ function updateSoftkeysForFocus() {
   if (panel.id === 'panel-diary') {
     var focusedEl = focused();
     var onAddFood = focusedEl && focusedEl.id === 'btn-diary-add-food';
-    setSoftkeys('', onAddFood ? 'Add' : 'Edit', 'Options');
+    // 'Edit' only makes sense with focus actually on a diary entry — at
+    // >240px, with #btn-diary-add-food hidden (see the Diary bottom nav)
+    // and an empty/short diary, focus can land on the date field or a
+    // bottom-nav button instead, neither of which has a "commit" action.
+    var onFoodRow = focusedEl && focusedEl.classList.contains('food-row');
+    setSoftkeys('', onAddFood ? 'Add' : (onFoodRow ? 'Edit' : ''), 'Options');
   } else if (panel.id === 'panel-search') {
     if (state.searchMode === 'recipe-ingredient') {
       setSoftkeys('Back', 'Select', '');
@@ -1440,6 +1476,8 @@ function updateSoftkeysForFocus() {
   } else if (panel.id === 'panel-my-foods') {
     setSoftkeys('Back', 'SELECT', '');
   } else if (panel.id === 'panel-my-recipes') {
+    setSoftkeys('Back', 'SELECT', '');
+  } else if (panel.id === 'panel-foods-recipes') {
     setSoftkeys('Back', 'SELECT', '');
   } else if (panel.id === 'panel-meals') {
     setSoftkeys('Back', 'SELECT', '');
@@ -1776,9 +1814,13 @@ function handleSoftLeft() {
   } else if (panel.id === 'panel-login-otp') {
     showLoginEmailPanel();
   } else if (panel.id === 'panel-my-foods') {
-    showOptionsPanel();
+    if (state.myFoodsBackTo === 'foods-recipes') showFoodsRecipesPanel();
+    else showOptionsPanel();
   } else if (panel.id === 'panel-my-recipes') {
-    showOptionsPanel();
+    if (state.myFoodsBackTo === 'foods-recipes') showFoodsRecipesPanel();
+    else showOptionsPanel();
+  } else if (panel.id === 'panel-foods-recipes') {
+    showDiaryPanel();
   } else if (panel.id === 'panel-meals') {
     showOptionsPanel();
   } else if (panel.id === 'panel-meal-edit') {
@@ -1800,11 +1842,10 @@ function handleSoftRight() {
   // panel-options: no right-softkey action
 }
 
-document.getElementById('sk-left').addEventListener('click', function () {
-  if (isSheetOpen()) { closeSheet(); } else { handleSoftLeft(); }
-});
-document.getElementById('sk-right').addEventListener('click', handleSoftRight);
-document.getElementById('sk-center').addEventListener('click', function () {
+// Shared by #sk-center's click AND #topbar-accept (the >240px touchscreen
+// UI's equivalent, see index.html) — extracted so both call sites dispatch
+// through one place rather than duplicating this per-panel switch.
+function handleSoftCenter() {
   if (isSheetOpen()) { interact(focused()); return; }
   var panel = activePanel();
   if (!panel) return;
@@ -1830,7 +1871,20 @@ document.getElementById('sk-center').addEventListener('click', function () {
   } else {
     interact(focused());
   }
-});
+}
+
+// Shared by #sk-left's click AND #topbar-back — same isSheetOpen() special
+// case both need (Back should close an open sheet rather than act on
+// whatever panel is behind it).
+function handleTopLeftAction() {
+  if (isSheetOpen()) { closeSheet(); } else { handleSoftLeft(); }
+}
+
+document.getElementById('sk-left').addEventListener('click', handleTopLeftAction);
+document.getElementById('sk-right').addEventListener('click', handleSoftRight);
+document.getElementById('sk-center').addEventListener('click', handleSoftCenter);
+document.getElementById('topbar-back').addEventListener('click', handleTopLeftAction);
+document.getElementById('topbar-accept').addEventListener('click', handleSoftCenter);
 document.getElementById('sheet-overlay').addEventListener('click', closeSheet);
 
 // ─── Screen: Diary ────────────────────────────────────────────────────────────
@@ -1885,9 +1939,118 @@ function buildDiaryRow(entry) {
   li.appendChild(name);
   li.appendChild(serving);
   li.appendChild(cal);
-  li.addEventListener('click', function () { showServingsPanel(entry); });
+  li.addEventListener('click', function () {
+    // A tap on an already-swiped-open row (>240px touchscreen UI, see
+    // wireDiarySwipeToDelete below) closes it instead of opening Servings —
+    // covers both the synthetic click a touch tap generates after
+    // touchend, and a plain mouse click landing on an already-open row.
+    if (li.classList.contains('swiped-open')) { closeDiarySwipeRow(li); return; }
+    showServingsPanel(entry);
+  });
   return li;
 }
+
+// ─── Diary row swipe-to-delete (>240px touchscreen UI only) ────────────────
+//
+// Reveal-then-tap: dragging a row left reveals #diary-row-delete-reveal
+// (one shared button, repositioned over whichever row is mid-drag rather
+// than duplicated per-row) behind it; tapping that button deletes via
+// deleteDiaryEntry (shared with deleteCurrentEntry's panel-servings path).
+// No swipe/drag interaction exists anywhere else in this app — scoped
+// specifically to #diary-ul per the plan. `_diarySwipeState` is the
+// current touch gesture, if any; `_diarySwipeOpenRow` is whichever single
+// row (if any) is left open between gestures.
+var _diarySwipeState = null;
+var _diarySwipeOpenRow = null;
+var DIARY_SWIPE_REVEAL_WIDTH = 72;
+
+function openDiarySwipeRow(row) {
+  row.classList.add('swiped-open');
+  row.style.transform = 'translateX(-' + DIARY_SWIPE_REVEAL_WIDTH + 'px)';
+  _diarySwipeOpenRow = row;
+}
+
+function closeDiarySwipeRow(row) {
+  row.classList.remove('swiped-open');
+  row.style.transform = 'translateX(0)';
+  document.getElementById('diary-row-delete-reveal').classList.remove('revealed');
+  if (_diarySwipeOpenRow === row) _diarySwipeOpenRow = null;
+}
+
+function wireDiarySwipeToDelete() {
+  var ul = document.getElementById('diary-ul');
+  var revealBtn = document.getElementById('diary-row-delete-reveal');
+
+  ul.addEventListener('touchstart', function (e) {
+    // Inert at ≤240px — KaiOS has no touchscreen, and this keeps the
+    // gesture from ever engaging there even if a touch event somehow
+    // fires, per "new HTML/behavior stays disabled at 240px".
+    if (!window.matchMedia('(min-width: 241px)').matches) return;
+    var row = e.target.closest('.food-row');
+    if (!row) return;
+    if (_diarySwipeOpenRow && _diarySwipeOpenRow !== row) closeDiarySwipeRow(_diarySwipeOpenRow);
+    var touch = e.touches[0];
+    _diarySwipeState = { row: row, startX: touch.clientX, startY: touch.clientY, dragging: false, lastOffset: 0 };
+  }, { passive: true });
+
+  ul.addEventListener('touchmove', function (e) {
+    if (!_diarySwipeState) return;
+    var touch = e.touches[0];
+    var dx = touch.clientX - _diarySwipeState.startX;
+    var dy = touch.clientY - _diarySwipeState.startY;
+    if (!_diarySwipeState.dragging) {
+      // Only claim the gesture once it's clearly horizontal — otherwise
+      // leave touchmove alone so vertical scrolling of the list still works.
+      if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
+      _diarySwipeState.dragging = true;
+      revealBtn.classList.add('revealed');
+      // #diary-row-delete-reveal is a sibling of #diary-ul, not a
+      // descendant (see css/list.css) — position:fixed + a viewport-
+      // relative rect is what actually lines it up with the row, unlike
+      // offsetTop/offsetHeight (relative to an ancestor it doesn't have).
+      var rect = _diarySwipeState.row.getBoundingClientRect();
+      revealBtn.style.top = rect.top + 'px';
+      revealBtn.style.left = (rect.right - DIARY_SWIPE_REVEAL_WIDTH) + 'px';
+      revealBtn.style.height = rect.height + 'px';
+      revealBtn.style.width = DIARY_SWIPE_REVEAL_WIDTH + 'px';
+    }
+    var base = (_diarySwipeOpenRow === _diarySwipeState.row) ? -DIARY_SWIPE_REVEAL_WIDTH : 0;
+    var offset = Math.min(0, Math.max(-DIARY_SWIPE_REVEAL_WIDTH, base + dx));
+    _diarySwipeState.row.style.transform = 'translateX(' + offset + 'px)';
+    _diarySwipeState.lastOffset = offset;
+  }, { passive: true });
+
+  ul.addEventListener('touchend', function () {
+    if (!_diarySwipeState) return;
+    if (_diarySwipeState.dragging) {
+      if (_diarySwipeState.lastOffset <= -DIARY_SWIPE_REVEAL_WIDTH / 2) openDiarySwipeRow(_diarySwipeState.row);
+      else closeDiarySwipeRow(_diarySwipeState.row);
+    }
+    // A plain tap (never dragged) falls through to the row's own click
+    // listener above, which already handles both "open Servings" and
+    // "close an already-open row" — nothing extra needed here for that case.
+    _diarySwipeState = null;
+  });
+
+  revealBtn.addEventListener('click', function () {
+    var row = _diarySwipeOpenRow;
+    if (!row) return;
+    // data-entry-id (an HTML attribute) is always a string; entry.id isn't
+    // necessarily one (IndexedDB auto-increment keys are numbers) — compare
+    // as strings on both sides rather than relying on ===.
+    var entryId = row.getAttribute('data-entry-id');
+    var entry = state.diaryEntries.filter(function (e) { return String(e.id) === entryId; })[0];
+    closeDiarySwipeRow(row);
+    if (!entry) return;
+    deleteDiaryEntry(entry, function () {
+      showStatus('Deleted', false);
+      syncAfterDiaryMutation();
+      renderDiary();
+    });
+  });
+}
+
+wireDiarySwipeToDelete();
 
 // Buckets entries into getMeals()'s order, plus a trailing "Other" group for
 // anything with no mealId or one pointing at a since-deleted meal — the
@@ -2955,27 +3118,23 @@ function addServingAsRecipeIngredient() {
   resumeRecipeBuilderPanel();
 }
 
-function deleteCurrentEntry() {
-  if (!state.editingEntry) return;
-  var entry = state.editingEntry;
+// Shared by deleteCurrentEntry() (panel-servings' right-softkey/Delete
+// button) and the >240px touchscreen UI's reveal-then-tap swipe delete on
+// diary rows (see wireDiaryRowSwipe below) — `entry` is passed explicitly
+// rather than read from state.editingEntry so the swipe gesture (which
+// never opens panel-servings at all) can delete straight from the list.
+// `callback` runs after the delete/usage-count bookkeeping completes;
+// deleteCurrentEntry's own navigation/toast/sync stay in its own wrapper.
+function deleteDiaryEntry(entry, callback) {
   var foodId = entry.foodId;
   function afterDelete() {
     // A guesstimate has no backing food (foodId is null) — nothing to
     // decrement. null isn't a valid IndexedDB key at all, so calling
     // dbDecrementUsageCount(null, ...) would throw synchronously rather
     // than just silently no-op.
-    if (!foodId) {
-      showDiaryPanel();
-      showStatus('Deleted', false);
-      syncAfterDiaryMutation();
-      return;
-    }
+    if (!foodId) { callback(); return; }
     state.usageCounts[foodId] = Math.max(0, (state.usageCounts[foodId] || 0) - 1);
-    dbDecrementUsageCount(foodId, function () {
-      showDiaryPanel();
-      showStatus('Deleted', false);
-      syncAfterDiaryMutation();
-    });
+    dbDecrementUsageCount(foodId, callback);
   }
   // Once this device has ever logged in, deletes become tombstones so a
   // later sync can report them — see dbSoftDeleteDiaryEntry.
@@ -2984,6 +3143,15 @@ function deleteCurrentEntry() {
   } else {
     dbDeleteDiaryEntry(entry.id, afterDelete);
   }
+}
+
+function deleteCurrentEntry() {
+  if (!state.editingEntry) return;
+  deleteDiaryEntry(state.editingEntry, function () {
+    showDiaryPanel();
+    showStatus('Deleted', false);
+    syncAfterDiaryMutation();
+  });
 }
 
 // ─── Screen: New Food ─────────────────────────────────────────────────────────
@@ -3706,7 +3874,10 @@ function refreshOptionsMyRecipesCount() {
   document.getElementById('opt-my-recipes-count').textContent = count ? String(count) : '';
 }
 
-document.getElementById('opt-my-recipes').addEventListener('click', showMyRecipesPanel);
+document.getElementById('opt-my-recipes').addEventListener('click', function () {
+  state.myFoodsBackTo = 'options';
+  showMyRecipesPanel();
+});
 
 // Mirrors deleteMyFood()'s tombstone-vs-hard-delete logic exactly, minus the
 // mySubmissions bookkeeping step — a recipe never has one. Only correctly
@@ -3946,7 +4117,10 @@ document.getElementById('opt-login').addEventListener('click', function () {
   }
 });
 
-document.getElementById('opt-my-foods').addEventListener('click', showMyFoodsPanel);
+document.getElementById('opt-my-foods').addEventListener('click', function () {
+  state.myFoodsBackTo = 'options';
+  showMyFoodsPanel();
+});
 
 document.getElementById('opt-show-caffeine').addEventListener('click', function () {
   setShowCaffeine(!getShowCaffeine());
@@ -4047,6 +4221,28 @@ function computeMyFoodStatus(submissionRecord, foodRecord) {
   }
   return 'local';
 }
+
+// Diary bottom nav's My Foods button (>240px touchscreen UI) — a thin
+// chooser between the two existing, unchanged My Foods/My Recipes panels
+// below, not a merged list. See state.myFoodsBackTo for how Back from
+// either of those routes back here instead of Options when reached this way.
+function showFoodsRecipesPanel() {
+  showPanel('panel-foods-recipes');
+  setSoftkeys('Back', 'SELECT', '');
+}
+
+document.getElementById('btn-foods-recipes-foods').addEventListener('click', function () {
+  state.myFoodsBackTo = 'foods-recipes';
+  showMyFoodsPanel();
+});
+document.getElementById('btn-foods-recipes-recipes').addEventListener('click', function () {
+  state.myFoodsBackTo = 'foods-recipes';
+  showMyRecipesPanel();
+});
+
+document.getElementById('btn-bottom-nav-foods').addEventListener('click', showFoodsRecipesPanel);
+document.getElementById('btn-bottom-nav-add').addEventListener('click', showSearchPanel);
+document.getElementById('btn-bottom-nav-settings').addEventListener('click', showOptionsPanel);
 
 function showMyFoodsPanel() {
   renderMyFoodsList(function () {

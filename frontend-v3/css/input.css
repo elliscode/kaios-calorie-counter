@@ -284,3 +284,36 @@ body.dark .submit-button {
 body.dark .submit-button[nav-selected="true"] {
   box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.45);
 }
+
+/* ─── Arrow-key highlight suppressed until a key is actually pressed ────
+   (>240px touchscreen UI only) — see the matching block in list.css for
+   the full rationale. Every glow-ring rule here only ever adds
+   box-shadow/border-radius on top of the element's own normal look, so
+   resetting is just box-shadow:none rather than needing per-rule color
+   bookkeeping the way list.css's solid-background rows do. */
+@media (min-width: 241px) {
+  body:not(.using-keyboard) .input-wrap input[nav-selected="true"],
+  body:not(.using-keyboard) .input-wrap select[nav-selected="true"],
+  body:not(.using-keyboard) .input-wrap[nav-selected="true"] {
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  body:not(.using-keyboard) .secondary-button[nav-selected="true"] {
+    box-shadow: none;
+  }
+
+  body:not(.using-keyboard) .remove-serving-btn[nav-selected="true"] {
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  body:not(.using-keyboard) .submit-button[nav-selected="true"] {
+    box-shadow: none;
+    background: #2E7D32;
+  }
+
+  body.dark:not(.using-keyboard) .submit-button[nav-selected="true"] {
+    background: #388E3C;
+  }
+}

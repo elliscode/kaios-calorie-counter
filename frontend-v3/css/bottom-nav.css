@@ -1,0 +1,121 @@
+/* ─── Diary bottom nav (>240px touchscreen UI) ──────────────────────────
+   Replaces #btn-diary-add-food (hidden below) and the hidden #softkey's
+   right-softkey "Options" action — see index.html's comment above
+   #diary-bottom-nav and app.js's btn-bottom-nav-* listeners. Hidden on
+   KaiOS (≤240px, same base-hidden/media-shown convention as
+   .header-action-btn in header.css) since #panel-diary already has its
+   existing "+ Add Food" row + #sk-right there. */
+#diary-bottom-nav {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 76px;
+  padding: 8px 24px;
+  align-items: center;
+  justify-content: space-between;
+  background: #fff;
+  border-top: 1px solid #ddd;
+  z-index: 20;
+}
+
+body.dark #diary-bottom-nav {
+  background: #1e1e1e;
+  border-top-color: #444;
+}
+
+#btn-diary-add-food {
+  display: block;
+}
+
+@media (min-width: 241px) {
+  #diary-bottom-nav {
+    display: flex;
+  }
+
+  #btn-diary-add-food {
+    display: none;
+  }
+
+  /* Room for the fixed 76px bar so the diary summary/date row don't sit
+     underneath it — mirrors how css/sheet.css's own >240px override moves
+     #sheet-overlay's bottom offset to clear #softkey today. */
+  #panel-diary .panel-content {
+    padding-bottom: 84px;
+  }
+}
+
+#btn-bottom-nav-foods,
+#btn-bottom-nav-settings {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  background: #f0f0f0;
+  color: #2E7D32;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+body.dark #btn-bottom-nav-foods,
+body.dark #btn-bottom-nav-settings {
+  background: #333;
+  color: #81C784;
+}
+
+/* The largest of the three, per spec — the primary action on this screen. */
+#btn-bottom-nav-add {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: none;
+  background: #2E7D32;
+  color: #fff;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(46, 125, 50, 0.4);
+}
+
+body.dark #btn-bottom-nav-add {
+  background: #388E3C;
+}
+
+#btn-bottom-nav-foods:active,
+#btn-bottom-nav-add:active,
+#btn-bottom-nav-settings:active {
+  filter: brightness(0.92);
+}
+
+/* ─── Foods & Recipes chooser (panel-foods-recipes) ─────────────────────
+   Two big thumb buttons — reachable only via #btn-bottom-nav-foods above,
+   so this content is inert (never navigated to) on KaiOS regardless of
+   styling; no >240px gating needed here the way persistent chrome needs. */
+#foods-recipes-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 4px;
+}
+
+#foods-recipes-chooser button {
+  padding: 32px 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #2E7D32;
+  background: #f0f0f0;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+body.dark #foods-recipes-chooser button {
+  color: #81C784;
+  background: #333;
+}
+
+#foods-recipes-chooser button:active {
+  filter: brightness(0.95);
+}

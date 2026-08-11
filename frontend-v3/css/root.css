@@ -79,6 +79,22 @@ body.dark .hint-link[nav-selected="true"] {
   color: #fff;
 }
 
+/* ─── Arrow-key highlight suppressed until a key is actually pressed ────
+   (>240px touchscreen UI only) — see the matching block in list.css for
+   the full rationale. */
+@media (min-width: 241px) {
+  body:not(.using-keyboard) .hint-link[nav-selected="true"] {
+    background: transparent;
+    color: #2E7D32;
+    text-decoration: underline;
+    border-radius: 0;
+  }
+
+  body.dark:not(.using-keyboard) .hint-link[nav-selected="true"] {
+    color: #81C784;
+  }
+}
+
 /* === Loading panel === */
 .loading-wrap {
   padding: 24px 8px;

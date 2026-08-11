@@ -32,10 +32,14 @@ async function pressSoftKey(page, key) {
   }, key);
 }
 
-// Diary -> Search is now via the permanent "+ Add Food" button (no more
-// Search left-softkey on Diary), not a pressSoftKey call.
+// Diary -> Search is via the permanent "+ Add Food" button at ≤240px, or
+// its >240px touchscreen-UI replacement, the Diary bottom nav's Add button
+// (see css/bottom-nav.css) — both call the same showSearchPanel action.
+// The `:visible` selector + Playwright's built-in auto-waiting picks
+// whichever one the current viewport actually shows, without a one-shot
+// isVisible() check racing the Diary panel's own show/hide transition.
 async function goToSearchFromDiary(page) {
-  await page.locator('#btn-diary-add-food').click();
+  await page.locator('#btn-diary-add-food:visible, #btn-bottom-nav-add:visible').click();
 }
 
 // Replaces the vendored ZXing build with tests/fixtures/fake-zxing.js so

@@ -91,4 +91,80 @@
     font-weight: 500;
     letter-spacing: 0.2px;
   }
+
+  /* Taller bar, centered title — root.css's own >240px .header rule sets
+     padding:6px 16px; this raises it further and centers <h1> now that
+     #topbar-back/#topbar-accept (not the title) own the left/right edges. */
+  .header {
+    padding: 16px 20px;
+    min-height: 56px;
+  }
+
+  .header h1 {
+    text-align: center;
+  }
+
+  /* .auth-status-text/.auth-dot sit at the far right of .header's normal
+     flex flow — exactly where #topbar-accept is now fixed on top of them.
+     Drop the text (redundant with Options' own login row) and reserve
+     enough right padding that the dot alone lands clear of the button
+     instead of underneath/behind it. */
+  .header {
+    padding-right: 64px;
+  }
+
+  .auth-status-text {
+    display: none;
+  }
+}
+
+/* ─── Top bar Back/Accept (>240px touchscreen UI) ───────────────────────
+   One global pair (see index.html's comment above these two buttons),
+   fixed over every panel's own .header rather than duplicated per-panel.
+   Hidden on KaiOS (≤240px, same convention as .header-action-btn above)
+   and hidden per-panel above 240px too (see the .topbar-btn-empty rule
+   below, toggled by app.js from #sk-left/#sk-center's own text — a panel
+   with no Back/Accept action today keeps neither button). */
+#topbar-back,
+#topbar-accept {
+  display: none;
+  position: fixed;
+  top: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 20;
+  align-items: center;
+  justify-content: center;
+}
+
+#topbar-back {
+  left: 12px;
+}
+
+#topbar-accept {
+  right: 12px;
+}
+
+@media (min-width: 241px) {
+  #topbar-back,
+  #topbar-accept {
+    display: flex;
+  }
+
+  #topbar-back.topbar-btn-empty,
+  #topbar-accept.topbar-btn-empty {
+    display: none;
+  }
+}
+
+#topbar-back:active,
+#topbar-accept:active {
+  background: rgba(255, 255, 255, 0.3);
 }

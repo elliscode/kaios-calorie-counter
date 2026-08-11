@@ -56,6 +56,37 @@ body.dark .list-row-empty {
   color: #fff;
 }
 
+/* ─── Swipe-to-delete (>240px touchscreen UI only) ───────────────────────
+   #diary-row-delete-reveal (see index.html) is one shared button
+   repositioned by wireDiarySwipeToDelete (app.js) over whichever row is
+   mid-drag. It's a sibling of #diary-ul, not a descendant, so it's
+   position:fixed and placed via the row's getBoundingClientRect() (already
+   viewport-relative) rather than position:absolute against an ancestor it
+   doesn't actually have. .food-row itself gets a translateX() transform
+   while dragging/open — the transition here is what makes the open/closed
+   snap feel deliberate rather than instant. */
+.food-row {
+  transition: transform 0.15s ease-out;
+}
+
+#diary-row-delete-reveal {
+  display: none;
+  position: fixed;
+  border: none;
+  background: #c0392b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 15;
+}
+
+@media (min-width: 241px) {
+  #diary-row-delete-reveal.revealed {
+    display: block;
+  }
+}
+
 .food-row[nav-selected="true"] .food-row-serving {
   color: rgba(255, 255, 255, 0.8);
 }
@@ -343,5 +374,85 @@ body.dark .nutrient-row .nutrient-label {
   .search-row {
     padding: 12px 16px;
     font-size: 15px;
+  }
+}
+
+/* ─── Arrow-key highlight suppressed until a key is actually pressed ────
+   (>240px touchscreen UI only — every rule above stays fully unconditional
+   at ≤240px, where KaiOS is always keyboard-driven). app.js already
+   toggles body.using-keyboard on arrow-key vs. mouse/touch input; these
+   overrides revert each [nav-selected="true"] rule above back to its
+   plain, unselected look while that class is absent, using higher
+   selector specificity rather than touching the base rules themselves. */
+@media (min-width: 241px) {
+  body:not(.using-keyboard) .food-row[nav-selected="true"] {
+    background: transparent;
+    color: inherit;
+  }
+
+  body:not(.using-keyboard) .food-row[nav-selected="true"] .food-row-serving {
+    color: #666;
+  }
+
+  body:not(.using-keyboard) .search-row[nav-selected="true"] {
+    background: transparent;
+    color: inherit;
+  }
+
+  body:not(.using-keyboard) .search-row[nav-selected="true"].in-tray::after {
+    color: #388E3C;
+  }
+
+  body:not(.using-keyboard) .search-row.add-new[nav-selected="true"],
+  body:not(.using-keyboard) .search-row.add-new-recipe[nav-selected="true"],
+  body:not(.using-keyboard) .search-row.add-new-guesstimate[nav-selected="true"] {
+    background: transparent;
+    color: #2E7D32;
+  }
+
+  body:not(.using-keyboard) .search-row[nav-selected="true"] .recipe-tag {
+    color: #666;
+  }
+
+  body:not(.using-keyboard) .options-row[nav-selected="true"] {
+    background: transparent;
+    color: inherit;
+  }
+
+  body:not(.using-keyboard) .options-row[nav-selected="true"] .options-value {
+    color: #666;
+  }
+
+  body:not(.using-keyboard) .options-row-danger[nav-selected="true"] {
+    background: transparent;
+    color: #c0392b;
+  }
+
+  body:not(.using-keyboard) .list-row[nav-selected="true"] {
+    background: transparent;
+    color: inherit;
+  }
+
+  body:not(.using-keyboard) .list-row.danger[nav-selected="true"] {
+    background: transparent;
+    color: #c0392b;
+  }
+
+  body.dark:not(.using-keyboard) .search-row.add-new[nav-selected="true"],
+  body.dark:not(.using-keyboard) .search-row.add-new-recipe[nav-selected="true"],
+  body.dark:not(.using-keyboard) .search-row.add-new-guesstimate[nav-selected="true"] {
+    color: #81C784;
+  }
+
+  body.dark:not(.using-keyboard) .options-row[nav-selected="true"] .options-value {
+    color: #8b8b93;
+  }
+
+  body.dark:not(.using-keyboard) .options-row-danger[nav-selected="true"] {
+    color: #e57373;
+  }
+
+  body.dark:not(.using-keyboard) .list-row.danger[nav-selected="true"] {
+    color: #e57373;
   }
 }
