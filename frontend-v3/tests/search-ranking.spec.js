@@ -24,7 +24,13 @@ test('with no usage history, matching foods fall back to alphabetical order', as
   expect(names).toEqual(['Butter', 'Butter, Organic', 'Whipped Butter']);
 });
 
-test('a frequently-logged food ranks above alphabetically-earlier matches, per the user\'s own example', async ({ page }) => {
+test('usage count only breaks ties between equally-close matches — an exact single-word match always wins outright', async ({ page }) => {
+  // "Butter" (1 unique word) is a strictly tighter match for "butter" than
+  // either "Whipped Butter" or "Butter, Organic" (2 unique words each) —
+  // searchMatchScore ranks it first regardless of usage count. Between the
+  // two equally-scored 2-word names, usage count still decides: logging
+  // "Whipped Butter" 6x should move it above the never-logged
+  // "Butter, Organic", without ever displacing "Butter" itself.
   for (var i = 0; i < 6; i++) {
     await quickAdd(page, 'Whipped Butter');
   }
@@ -34,7 +40,7 @@ test('a frequently-logged food ranks above alphabetically-earlier matches, per t
   await page.waitForTimeout(250);
 
   var names = await page.locator('#panel-search .search-row:not(.add-new):not(.add-new-recipe):not(.add-new-guesstimate)').allTextContents();
-  expect(names).toEqual(['Whipped Butter', 'Butter', 'Butter, Organic']);
+  expect(names).toEqual(['Butter', 'Whipped Butter', 'Butter, Organic']);
 });
 
 test('deleting a logged entry decrements its usage count back down', async ({ page }) => {

@@ -18,7 +18,7 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.41';
+var APP_VERSION = '3.0.43';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine', 'alcohol'];
 var NON_NUTRIENT_KEYS = [
@@ -97,6 +97,38 @@ var SEARCH_PUNCTUATION_REGEX = /[.,/#!$%^&*;:{}=\-_`~()'"?[\]\\|<>+@]/g;
 // naturally single-spaced query like "mac cheese" still substring-matches.
 function normalizeForSearch(s) {
   return (s || '').toLowerCase().replace(SEARCH_PUNCTUATION_REGEX, '').replace(/\s+/g, ' ').trim();
+}
+
+function tokenize(s) {
+  return normalizeForSearch(s).split(' ').filter(Boolean);
+}
+
+// Every query token must appear as a substring of *some* token in the
+// candidate name — not the same position, not the whole phrase as one
+// contiguous substring. Fixes cases like "hershey special dark" vs.
+// "Hershey's Special Dark" (stripping the apostrophe alone still leaves an
+// extra "s" in the way of a whole-string substring match) and makes word
+// order irrelevant ("dark hershey" now matches "Hershey's Dark" too).
+// Mirrored in backend/lambda/calorie_api/search.py's _tokens_match.
+function matchesSearchTokens(name, queryTokens) {
+  var nameTokens = tokenize(name);
+  return queryTokens.every(function (qt) {
+    return nameTokens.some(function (nt) { return nt.indexOf(qt) !== -1; });
+  });
+}
+
+// Ratio of how many words you typed to how many unique words are in the
+// candidate name. Every candidate reaching this function has already
+// passed matchesSearchTokens (every query token found somewhere) — this
+// only decides ORDER, never inclusion. A higher score means a tighter,
+// less-diluted match (e.g. "butter" against "Butter" scores 1.0; against
+// "Butter, Organic" scores 0.5) and should sort first. Mirrored in
+// backend/lambda/calorie_api/search.py's _match_score.
+function searchMatchScore(name, queryTokens) {
+  var uniqueNameTokens = {};
+  tokenize(name).forEach(function (t) { uniqueNameTokens[t] = true; });
+  var uniqueCount = Object.keys(uniqueNameTokens).length;
+  return uniqueCount ? queryTokens.length / uniqueCount : 0;
 }
 
 function nowSec() {
@@ -2229,18 +2261,21 @@ function renderRemoteSearchResults(query, results) {
 function renderSearchResults(query) {
   var ul = document.getElementById('search-ul');
   ul.innerHTML = '';
-  var q = normalizeForSearch(query.trim());
+  var queryTokens = tokenize(query);
   var pickingIngredient = state.searchMode === 'recipe-ingredient';
-  var results = q ? state.allFoods.filter(function (f) {
+  var results = queryTokens.length ? state.allFoods.filter(function (f) {
     if (f.deleted === true) return false;
     // A recipe can't be an ingredient of another recipe — keeps nutrition
     // baked-in-once at each level, no chained/nested recompute chains.
     if (pickingIngredient && f.type === 'recipe') return false;
-    return normalizeForSearch(f.name).indexOf(q) !== -1;
+    return matchesSearchTokens(f.name, queryTokens);
   }).sort(function (a, b) {
+    var scoreA = searchMatchScore(a.name, queryTokens);
+    var scoreB = searchMatchScore(b.name, queryTokens);
+    if (scoreB !== scoreA) return scoreB - scoreA; // closer match first
     var countA = state.usageCounts[a.id] || 0;
     var countB = state.usageCounts[b.id] || 0;
-    if (countB !== countA) return countB - countA; // most-used first
+    if (countB !== countA) return countB - countA; // then most-used
     return a.name.localeCompare(b.name);            // then alphabetical
   }) : [];
   // Unbounded — full result set is rendered as DOM rows below. Revisit with
@@ -2613,12 +2648,15 @@ document.getElementById('input-scan-match-search').addEventListener('input', fun
 function renderScanMatchResults(query) {
   var ul = document.getElementById('scan-match-ul');
   ul.innerHTML = '';
-  var q = normalizeForSearch(query.trim());
-  var results = q ? state.allFoods.filter(function (f) {
+  var queryTokens = tokenize(query);
+  var results = queryTokens.length ? state.allFoods.filter(function (f) {
     if (f.deleted === true) return false;
     if (f.type === 'recipe') return false;
-    return normalizeForSearch(f.name).indexOf(q) !== -1;
+    return matchesSearchTokens(f.name, queryTokens);
   }).sort(function (a, b) {
+    var scoreA = searchMatchScore(a.name, queryTokens);
+    var scoreB = searchMatchScore(b.name, queryTokens);
+    if (scoreB !== scoreA) return scoreB - scoreA;
     var countA = state.usageCounts[a.id] || 0;
     var countB = state.usageCounts[b.id] || 0;
     if (countB !== countA) return countB - countA;
@@ -2634,7 +2672,7 @@ function renderScanMatchResults(query) {
     ul.appendChild(li);
   });
 
-  document.getElementById('scan-match-empty').style.display = (q && !results.length) ? 'block' : 'none';
+  document.getElementById('scan-match-empty').style.display = (queryTokens.length && !results.length) ? 'block' : 'none';
 }
 
 // Picking which serving this barcode matches — a bottom sheet (the app's

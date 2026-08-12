@@ -149,6 +149,39 @@ test('scan match search ignores punctuation — "apple raw" (no comma) still mat
   await expect(page.locator('#scan-match-ul .search-row', { hasText: 'Apple, Raw' })).toBeVisible();
 });
 
+test('scan match search: token matching finds "Hershey\'s Special Dark" for "hershey special dark", and word order does not matter', async ({ page }) => {
+  await page.evaluate(function () {
+    return new Promise(function (resolve) {
+      window.dbBulkPutFoods([{
+        id: 'test-hersheys-id',
+        name: "Hershey's Special Dark",
+        source: 'catalog',
+        updated: Math.floor(Date.now() / 1000),
+        deleted: false,
+        servings: [{ name: 'bar', quantity: 1, calories: 180, fat: 12, carbohydrates: 20, protein: 2 }]
+      }], resolve);
+    });
+  });
+  await page.goto('/'); // reload so state.allFoods (populated once at boot) picks up the new food
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await goToSearchFromDiary(page);
+
+  await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
+    route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) });
+  });
+
+  await scanBarcode(page, '049000028916');
+  await expect(page.locator('#panel-scan-result')).toHaveAttribute('active', 'true');
+
+  await page.fill('#input-scan-match-search', 'hershey special dark');
+  await page.waitForTimeout(250);
+  await expect(page.locator('#scan-match-ul .search-row', { hasText: "Hershey's Special Dark" })).toBeVisible();
+
+  await page.fill('#input-scan-match-search', 'dark hershey'); // reordered
+  await page.waitForTimeout(250);
+  await expect(page.locator('#scan-match-ul .search-row', { hasText: "Hershey's Special Dark" })).toBeVisible();
+});
+
 test('"+ Create new food" prefills a blank name and just the UPC (the panel is only ever reached on a miss)', async ({ page }) => {
   await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
     route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) });

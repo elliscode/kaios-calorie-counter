@@ -65,3 +65,81 @@ test('search ignores punctuation — "apple raw" (no comma) still matches "Apple
 
   await expect(page.locator('.search-row', { hasText: 'Apple, Raw' })).toBeVisible();
 });
+
+test('token-based search: "hershey special dark" matches "Hershey\'s Special Dark" (plain substring match would miss it — the extra "s" from the apostrophe is in the way)', async ({ page }) => {
+  await page.evaluate(function () {
+    return new Promise(function (resolve) {
+      window.dbBulkPutFoods([{
+        id: 'test-hersheys-id',
+        name: "Hershey's Special Dark",
+        source: 'catalog',
+        updated: Math.floor(Date.now() / 1000),
+        deleted: false,
+        servings: [{ name: 'bar', quantity: 1, calories: 180, fat: 12, carbohydrates: 20, protein: 2 }]
+      }], resolve);
+    });
+  });
+  await page.goto('/'); // reload so state.allFoods (populated once at boot) picks up the new food
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'hershey special dark');
+  await page.waitForTimeout(250);
+  await expect(page.locator('.search-row', { hasText: "Hershey's Special Dark" })).toBeVisible();
+});
+
+test('token-based search: word order does not matter — "dark hershey" still matches "Hershey\'s Special Dark"', async ({ page }) => {
+  await page.evaluate(function () {
+    return new Promise(function (resolve) {
+      window.dbBulkPutFoods([{
+        id: 'test-hersheys-id',
+        name: "Hershey's Special Dark",
+        source: 'catalog',
+        updated: Math.floor(Date.now() / 1000),
+        deleted: false,
+        servings: [{ name: 'bar', quantity: 1, calories: 180, fat: 12, carbohydrates: 20, protein: 2 }]
+      }], resolve);
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'dark hershey');
+  await page.waitForTimeout(250);
+  await expect(page.locator('.search-row', { hasText: "Hershey's Special Dark" })).toBeVisible();
+});
+
+test('results are ranked by match closeness — a tight match outranks a longer name diluted by extra words', async ({ page }) => {
+  await page.evaluate(function () {
+    return new Promise(function (resolve) {
+      window.dbBulkPutFoods([
+        {
+          id: 'test-hersheys-tight-id',
+          name: "Hershey's Special Dark",
+          source: 'catalog',
+          updated: Math.floor(Date.now() / 1000),
+          deleted: false,
+          servings: [{ name: 'bar', quantity: 1, calories: 180, fat: 12, carbohydrates: 20, protein: 2 }]
+        },
+        {
+          id: 'test-hersheys-loose-id',
+          name: "Betty Crocker, Hersheys, Special Dark Premium Frosting",
+          source: 'catalog',
+          updated: Math.floor(Date.now() / 1000),
+          deleted: false,
+          servings: [{ name: 'serving', quantity: 1, calories: 140, fat: 5, carbohydrates: 22, protein: 0 }]
+        }
+      ], resolve);
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'hershey special dark');
+  await page.waitForTimeout(250);
+
+  var names = await page.locator('#panel-search .search-row:not(.add-new):not(.add-new-recipe):not(.add-new-guesstimate)').allTextContents();
+  expect(names).toEqual(["Hershey's Special Dark", 'Betty Crocker, Hersheys, Special Dark Premium Frosting']);
+});

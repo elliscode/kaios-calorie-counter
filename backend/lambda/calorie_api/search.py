@@ -15,8 +15,8 @@ s3 = boto3.client("s3")
 # Lambda container — the backing file is ~455K rows (~30MB), too big to
 # re-fetch/re-parse from S3 on every invocation.
 _search_index = None  # {name: upc}
-_search_rows = None  # [(name_normalized, name, upc), ...] — precomputed once
-# so normalization isn't re-run on all 455K names on every single request.
+_search_rows = None  # [(name_tokens, name, upc), ...] — precomputed once so
+# tokenizing isn't re-run on all 455K names on every single request.
 
 # Mirrors frontend-v3/app.js's SEARCH_PUNCTUATION_REGEX/normalizeForSearch
 # exactly — punctuation stripped (not replaced with a space) from both the
@@ -36,6 +36,31 @@ def _normalize_for_search(s):
     return _WHITESPACE_RE.sub(" ", _PUNCTUATION_RE.sub("", s.lower())).strip()
 
 
+def _tokenize(s):
+    return [t for t in _normalize_for_search(s).split(" ") if t]
+
+
+# Mirrors frontend-v3/app.js's matchesSearchTokens exactly — every query
+# token must appear as a substring of *some* token in the candidate name,
+# not the same position, not the whole phrase as one contiguous substring.
+# Fixes cases like "hershey special dark" vs. "Hershey's Special Dark"
+# (stripping the apostrophe alone still leaves an extra "s" in the way of a
+# whole-string substring match) and makes word order irrelevant.
+def _tokens_match(query_tokens, name_tokens):
+    return all(any(qt in nt for nt in name_tokens) for qt in query_tokens)
+
+
+# Mirrors frontend-v3/app.js's searchMatchScore exactly — ratio of how many
+# words were typed to how many unique words are in the candidate name.
+# Every candidate reaching this function has already passed _tokens_match
+# (every query token found somewhere) — this only decides ORDER, never
+# inclusion. A higher score means a tighter, less-diluted match and sorts
+# first.
+def _match_score(query_tokens, name_tokens):
+    unique_count = len(set(name_tokens))
+    return len(query_tokens) / unique_count if unique_count else 0
+
+
 def _load_search_index():
     global _search_index, _search_rows
     obj = s3.get_object(Bucket=SEARCH_BUCKET, Key=SEARCH_FILE)
@@ -47,7 +72,7 @@ def _load_search_index():
         upc, name = line.split("\t", 1)
         index[name] = upc  # last occurrence in the file wins on duplicate names
     _search_index = index
-    _search_rows = [(_normalize_for_search(name), name, upc) for name, upc in index.items()]
+    _search_rows = [(_tokenize(name), name, upc) for name, upc in index.items()]
 
 
 def _get_search_rows():
@@ -57,20 +82,24 @@ def _get_search_rows():
 
 
 # Mirrors the client's own match predicate exactly (renderSearchResults in
-# frontend-v3/app.js) — case-insensitive, punctuation-insensitive substring
-# match, no word-splitting, no minimum length — just scanning a much bigger
-# (455K-row) list the device never downloads.
+# frontend-v3/app.js) — case-insensitive, punctuation-insensitive,
+# word-order-independent token matching, no minimum length — scanning the
+# full 455K-row list the device never downloads and ranking every match by
+# _match_score before slicing to SEARCH_LIMIT. No early-exit: which 100
+# results are the *best* can't be known without scoring every match first
+# (benchmarked at 0.2-0.4s worst case against the real data file, including
+# single-character queries that match a large fraction of the catalog).
 def search_route(event):
     body = parse_body(event.get("body"))
-    query = _normalize_for_search(str(body.get("query") or "").strip())
-    if not query:
+    query_tokens = _tokenize(str(body.get("query") or "").strip())
+    if not query_tokens:
         return format_response(event=event, http_code=200, body=[])
 
     rows = _get_search_rows()
-    results = []
-    for name_normalized, name, upc in rows:
-        if query in name_normalized:
-            results.append({"name": name, "upc": upc})
-            if len(results) >= SEARCH_LIMIT:
-                break
+    matches = []
+    for name_tokens, name, upc in rows:
+        if _tokens_match(query_tokens, name_tokens):
+            matches.append((_match_score(query_tokens, name_tokens), name, upc))
+    matches.sort(key=lambda m: -m[0])  # stable: ties keep original file-scan order
+    results = [{"name": name, "upc": upc} for _, name, upc in matches[:SEARCH_LIMIT]]
     return format_response(event=event, http_code=200, body=results)
