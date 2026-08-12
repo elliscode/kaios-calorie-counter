@@ -7,6 +7,17 @@ const path = require('path');
 // every test written before that setting existed already assumes — pass
 // `{ afterAddFood: null }` to skip seeding entirely and exercise the app's
 // real default ('modify') instead, as after-add-food.spec.js does.
+//
+// `opts.mealsEnabled` similarly seeds app.js's getMealsEnabled/'mealsEnabled'
+// key. Defaults to 'false' since every test written before Meals defaulted
+// on assumes a flat, ungrouped diary list — pass `{ mealsEnabled: null }` to
+// skip seeding entirely and exercise the app's real default (on) instead, as
+// meals.spec.js's own default-behavior test does. Unlike afterAddFood above,
+// this only seeds when nothing is stored yet (addInitScript reruns on every
+// navigation, and several meals.spec.js tests toggle the setting via the UI
+// then reload mid-test to check it persisted — an unconditional
+// localStorage.setItem here would silently stomp that real change back to
+// the seed on every such reload).
 async function mockDataHost(page, opts) {
   opts = opts || {};
   var afterAddFood = 'afterAddFood' in opts ? opts.afterAddFood : 'direct';
@@ -14,6 +25,12 @@ async function mockDataHost(page, opts) {
     await page.addInitScript(function (mode) {
       localStorage.setItem('afterAddFood', mode);
     }, afterAddFood);
+  }
+  var mealsEnabled = 'mealsEnabled' in opts ? opts.mealsEnabled : 'false';
+  if (mealsEnabled !== null) {
+    await page.addInitScript(function (val) {
+      if (localStorage.getItem('mealsEnabled') === null) localStorage.setItem('mealsEnabled', val);
+    }, mealsEnabled);
   }
   await page.route('https://calories.elliscode.com/manifest.json', function (route) {
     route.fulfill({ path: path.join(__dirname, 'fixtures/manifest.json') });

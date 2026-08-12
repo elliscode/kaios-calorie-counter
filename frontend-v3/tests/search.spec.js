@@ -57,3 +57,11 @@ test('tray: queue multiple foods with right softkey, commit them all with center
   expect(names.sort()).toEqual(['Apple, Raw', 'Banana, Raw']);
   await expect(page.locator('#sum-calories')).toHaveText('141'); // 52 (apple@100g) + 89 (banana@100g)
 });
+
+test('search ignores punctuation — "apple raw" (no comma) still matches "Apple, Raw"', async ({ page }) => {
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'apple raw');
+  await page.waitForTimeout(250);
+
+  await expect(page.locator('.search-row', { hasText: 'Apple, Raw' })).toBeVisible();
+});

@@ -191,8 +191,15 @@ body.dark .progress-bar-fill {
     padding-bottom: 8px;
   }
 
+  /* Moved to the top, under the header, instead of the bottom — on iOS,
+     an on-screen keyboard covers anything pinned to the bottom of the
+     viewport while a text field is focused, and even with no keyboard up,
+     the Diary bottom nav (#diary-bottom-nav) can sit right on top of a
+     bottom-anchored toast too. header.css's .header has min-height:56px
+     at this width; 64px clears it with a little breathing room. */
   .status-toast {
-    bottom: 8px;
+    top: 64px;
+    bottom: auto;
   }
 
   .header {

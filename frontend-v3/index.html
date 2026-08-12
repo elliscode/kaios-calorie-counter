@@ -11,14 +11,14 @@
   <meta property="og:description" content="Track your daily intake across devices">
   <meta property="og:image" content="https://calories.elliscode.com/img/banner-og.png">
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.29">
-  <link rel="stylesheet" href="css/header.css?v=3.0.29">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.29">
-  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.29">
-  <link rel="stylesheet" href="css/input.css?v=3.0.29">
-  <link rel="stylesheet" href="css/list.css?v=3.0.29">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.29">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.29">
+  <link rel="stylesheet" href="css/root.css?v=3.0.41">
+  <link rel="stylesheet" href="css/header.css?v=3.0.41">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.41">
+  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.41">
+  <link rel="stylesheet" href="css/input.css?v=3.0.41">
+  <link rel="stylesheet" href="css/list.css?v=3.0.41">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.41">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.41">
 </head>
 <body>
   <div id="root">
@@ -82,6 +82,10 @@
           <div class="summary-row" id="row-sum-caffeine">
             <span class="summary-label">Total Caffeine</span>
             <span class="summary-value"><span id="sum-caffeine">0</span> mg</span>
+          </div>
+          <div class="summary-row" id="row-sum-alcohol">
+            <span class="summary-label">Total Alcohol</span>
+            <span class="summary-value"><span id="sum-alcohol">0</span> g</span>
           </div>
         </div>
 
@@ -210,6 +214,10 @@
             <span class="summary-label">Caffeine</span>
             <span class="summary-value"><span id="serv-caffeine">0</span> mg</span>
           </div>
+          <div class="summary-row" id="row-serv-alcohol">
+            <span class="summary-label">Alcohol</span>
+            <span class="summary-value"><span id="serv-alcohol">0</span> g</span>
+          </div>
         </div>
 
         <div class="nutrient-table" id="servings-nutrients"></div>
@@ -332,6 +340,10 @@
             <span class="summary-label">Caffeine</span>
             <span class="summary-value"><span id="recipe-caffeine">0</span> mg</span>
           </div>
+          <div class="summary-row" id="row-recipe-alcohol">
+            <span class="summary-label">Alcohol</span>
+            <span class="summary-value"><span id="recipe-alcohol">0</span> g</span>
+          </div>
         </div>
 
         <div class="nutrient-table" id="recipe-nutrients"></div>
@@ -394,6 +406,10 @@
           <li class="options-row" id="opt-show-caffeine" nav-selectable="true">
             <span class="options-label">Show Caffeine</span>
             <span class="options-value" id="opt-show-caffeine-value"></span>
+          </li>
+          <li class="options-row" id="opt-show-alcohol" nav-selectable="true">
+            <span class="options-label">Show Alcohol</span>
+            <span class="options-value" id="opt-show-alcohol-value"></span>
           </li>
           <li class="options-row" id="opt-after-add-food" nav-selectable="true">
             <span class="options-label">After I add a food…</span>
@@ -570,6 +586,6 @@
 
   </div>
   <script src="js/vendor/zxing.min.js"></script>
-  <script src="app.js?v=3.0.29"></script>
+  <script src="app.js?v=3.0.41"></script>
 </body>
 </html>

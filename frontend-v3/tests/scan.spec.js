@@ -136,6 +136,19 @@ test('matching to an existing food adds it to the diary and proposes a UPC mappi
   });
 });
 
+test('scan match search ignores punctuation — "apple raw" (no comma) still matches "Apple, Raw"', async ({ page }) => {
+  await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
+    route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) });
+  });
+
+  await scanBarcode(page, '049000028914');
+  await expect(page.locator('#panel-scan-result')).toHaveAttribute('active', 'true');
+
+  await page.fill('#input-scan-match-search', 'apple raw');
+  await page.waitForTimeout(250);
+  await expect(page.locator('#scan-match-ul .search-row', { hasText: 'Apple, Raw' })).toBeVisible();
+});
+
 test('"+ Create new food" prefills a blank name and just the UPC (the panel is only ever reached on a miss)', async ({ page }) => {
   await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
     route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) });

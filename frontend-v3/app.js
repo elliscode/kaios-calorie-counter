@@ -4,6 +4,7 @@ var DATA_HOST = 'https://calories.elliscode.com';
 var API_HOST = 'https://api.calories.elliscode.com';
 var SUBMIT_URL = API_HOST + '/submit';
 var LOOKUP_UPC_URL = API_HOST + '/lookup-upc';
+var SEARCH_URL = API_HOST + '/search';
 var SUBMIT_UPC_MAPPING_URL = API_HOST + '/submit-upc-mapping';
 var ACCOUNT_OTP_URL = API_HOST + '/account/otp';
 var ACCOUNT_LOGIN_URL = API_HOST + '/account/login';
@@ -17,9 +18,9 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.29';
+var APP_VERSION = '3.0.41';
 
-var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine'];
+var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine', 'alcohol'];
 var NON_NUTRIENT_KEYS = [
   'id', 'date', 'foodId', 'foodName', 'servingName', 'quantity', 'name',
   'guid', 'updated', 'deleted', 'type', 'mealId'
@@ -76,6 +77,26 @@ function formatQty(qty) {
 
 function humanizeKey(key) {
   return key.replace(/([A-Z])/g, ' $1').replace(/^./, function (c) { return c.toUpperCase(); });
+}
+
+// Shared by every search predicate in this file (renderSearchResults,
+// renderScanMatchResults) — punctuation is stripped (not replaced with a
+// space) from both the query and the candidate name before matching, so
+// e.g. "moms" matches "Mom's" and "mac n cheese" matches "Mac & Cheese".
+// A static character class rather than \p{L}-style Unicode regex classes,
+// since this codebase targets an old KaiOS Gecko 84 build with iffy modern-
+// regex support (see xhrGetJson's fetch()-header comment for another
+// example of that same hardware quirk) — mirrored in
+// backend/lambda/calorie_api/search.py's _normalize_for_search so the
+// remote catalog search behaves the same way.
+var SEARCH_PUNCTUATION_REGEX = /[.,/#!$%^&*;:{}=\-_`~()'"?[\]\\|<>+@]/g;
+
+// Punctuation is stripped outright (not replaced with a space), which can
+// leave a run of two spaces behind where one used to sit next to it (e.g.
+// "Mac & Cheese" -> "mac  cheese") — collapsed back down to one so a
+// naturally single-spaced query like "mac cheese" still substring-matches.
+function normalizeForSearch(s) {
+  return (s || '').toLowerCase().replace(SEARCH_PUNCTUATION_REGEX, '').replace(/\s+/g, ' ').trim();
 }
 
 function nowSec() {
@@ -167,6 +188,34 @@ function applyCaffeineVisibility() {
   if (rowRecipe) rowRecipe.style.display = display;
 }
 
+// ─── Show Alcohol setting ────────────────────────────────────────────────
+// Exact mirror of Show Caffeine above — alcohol has no input on the
+// "+ Add New Food" form either (admin-review-only field), most foods just
+// show "0 g", which not everyone cares to see. Defaults to off.
+function getShowAlcohol() {
+  try {
+    var raw = localStorage.getItem('showAlcohol');
+    return raw === null ? false : raw === 'true';
+  } catch (e) { return false; }
+}
+
+function setShowAlcohol(show) {
+  try { localStorage.setItem('showAlcohol', String(show)); } catch (e) { /* ignore */ }
+  setSettingsUpdatedAt(nowSec());
+  applyAlcoholVisibility();
+  syncPreferences();
+}
+
+function applyAlcoholVisibility() {
+  var display = getShowAlcohol() ? '' : 'none';
+  var rowSum = document.getElementById('row-sum-alcohol');
+  var rowServ = document.getElementById('row-serv-alcohol');
+  var rowRecipe = document.getElementById('row-recipe-alcohol');
+  if (rowSum) rowSum.style.display = display;
+  if (rowServ) rowServ.style.display = display;
+  if (rowRecipe) rowRecipe.style.display = display;
+}
+
 // ─── After I add a food… setting ────────────────────────────────────────
 // Independent of Meals/Require Meal Selection below — this is the general
 // "stop at the servings-confirmation screen every time" switch, usable with
@@ -184,7 +233,7 @@ function setAfterAddFood(mode) {
 }
 
 // ─── Meals setting ──────────────────────────────────────────────────────
-// Off by default — grouping the diary by meal is opt-in. Meal names/order
+// On by default — grouping the diary by meal. Meal names/order
 // live in the same `settings` sync blob as showCaffeine (see
 // getSettingsUpdatedAt above) rather than their own IndexedDB store/sync
 // collection — this list is edited rarely, so the whole-blob-newer-wins
@@ -200,7 +249,10 @@ var DEFAULT_MEALS = [
 ];
 
 function getMealsEnabled() {
-  try { return localStorage.getItem('mealsEnabled') === 'true'; } catch (e) { return false; }
+  try {
+    var raw = localStorage.getItem('mealsEnabled');
+    return raw === null ? true : raw === 'true'; // default ON
+  } catch (e) { return true; }
 }
 
 function setMealsEnabled(on) {
@@ -920,17 +972,15 @@ function setLastManifestCheck(timestamp) {
 // `now` explicitly (rather than reading `new Date()` internally) keeps
 // this a pure, easily-testable function.
 function mostRecentTuesday8am(now) {
-  // var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 0, 0, 0);
-  // var daysSinceTuesday = (d.getDay() - 2 + 7) % 7; // getDay(): 0=Sun, 2=Tue
-  // d.setDate(d.getDate() - daysSinceTuesday);
-  // if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7); // it's Tuesday but before 8am
-  // return d.getTime();
-
-  // TODO: forcing this to always refresh for now
-  return (new Date()).getTime();
+  var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 0, 0, 0);
+  var daysSinceTuesday = (d.getDay() - 2 + 7) % 7; // getDay(): 0=Sun, 2=Tue
+  d.setDate(d.getDate() - daysSinceTuesday);
+  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7); // it's Tuesday but before 8am
+  return d.getTime();
 }
 
 function shouldCheckManifest(hasAnySyncedFiles, now) {
+  return true;
   if (!hasAnySyncedFiles) return true; // never synced, or DB was cleared — must bootstrap
   return getLastManifestCheck() < mostRecentTuesday8am(now);
 }
@@ -1254,6 +1304,9 @@ function applyPreferencesSyncMerge(merged, callback) {
     if (typeof merged.settings.showCaffeine === 'boolean') {
       try { localStorage.setItem('showCaffeine', String(merged.settings.showCaffeine)); } catch (e) { /* ignore */ }
     }
+    if (typeof merged.settings.showAlcohol === 'boolean') {
+      try { localStorage.setItem('showAlcohol', String(merged.settings.showAlcohol)); } catch (e) { /* ignore */ }
+    }
     if (typeof merged.settings.mealsEnabled === 'boolean') {
       try { localStorage.setItem('mealsEnabled', String(merged.settings.mealsEnabled)); } catch (e) { /* ignore */ }
     }
@@ -1271,6 +1324,7 @@ function applyPreferencesSyncMerge(merged, callback) {
     }
     if (merged.settings.updated) setSettingsUpdatedAt(merged.settings.updated);
     applyCaffeineVisibility();
+    applyAlcoholVisibility();
     applyMealsVisibility();
   }
   var lastServings = merged.lastServings || {};
@@ -1315,11 +1369,21 @@ function syncPreferences(callback) {
         csrf: getCsrf(),
         settings: {
           showCaffeine: getShowCaffeine(),
+          showAlcohol: getShowAlcohol(),
           mealsEnabled: getMealsEnabled(),
           requireMealSelection: getRequireMealSelection(),
           afterAddFood: getAfterAddFood(),
           meals: getMeals(),
-          updated: getSettingsUpdatedAt() || nowSec()
+          // Deliberately NOT `|| nowSec()` — 0 means "this device has never
+          // changed a setting locally," and must stay 0 (always loses the
+          // newest-updated-wins merge below) rather than be stamped with
+          // the current time. Otherwise a brand-new/never-touched device's
+          // very first sync would look newer than another device's real,
+          // previously-pushed settings and silently clobber them — every
+          // setter (setShowCaffeine, setMealsEnabled, etc.) already calls
+          // setSettingsUpdatedAt(nowSec()) itself the moment there's an
+          // actual local change to report.
+          updated: getSettingsUpdatedAt()
         },
         lastServings: lastServings,
         usageCounts: usageCounts
@@ -1425,6 +1489,20 @@ function setSoftkeys(left, center, right) {
   var acceptBtn = document.getElementById('topbar-accept');
   acceptBtn.classList.toggle('topbar-btn-empty', !center);
   if (center) acceptBtn.setAttribute('aria-label', center);
+
+  // >240px touchscreen UI only: 'SELECT' is the generic "whatever's
+  // focused, activate it" label handleSoftCenter()'s fallback case uses
+  // for every plain list/tap-to-choose screen (Options, My Foods, My
+  // Recipes, the Foods & Recipes chooser, Meals) — exactly what tapping a
+  // row already does directly, so the top-bar checkmark has no real job
+  // there (same reasoning as panel-diary's explicit override in
+  // updateSoftkeysForFocus() for its own, differently-labeled case).
+  // Belongs here rather than in updateSoftkeysForFocus() because several
+  // show*Panel functions (showOptionsPanel, showMyFoodsPanel, etc.) call
+  // setSoftkeys() a second time directly right after showPanel()'s own
+  // focus-triggered call — anywhere else, that second call would win and
+  // undo the override.
+  if (center === 'SELECT') acceptBtn.classList.add('topbar-btn-empty');
 }
 
 function updateSoftkeysForFocus() {
@@ -1440,6 +1518,16 @@ function updateSoftkeysForFocus() {
     // bottom-nav button instead, neither of which has a "commit" action.
     var onFoodRow = focusedEl && focusedEl.classList.contains('food-row');
     setSoftkeys('', onAddFood ? 'Add' : (onFoodRow ? 'Edit' : ''), 'Options');
+    // #sk-center's "Edit" label above is real, needed KaiOS/hardware-D-pad
+    // behavior — left untouched. But #topbar-accept (>240px touchscreen UI)
+    // showing it is a pure artifact: showPanel() auto-focuses the first
+    // diary row whenever one exists (since #btn-diary-add-food is hidden at
+    // this width), with no visible highlight to explain why (the highlight
+    // itself stays hidden until an arrow key is actually pressed — see
+    // list.css). It's also just redundant there regardless — tapping a row
+    // already opens Servings directly, so this button has no real job on
+    // Diary at all.
+    document.getElementById('topbar-accept').classList.add('topbar-btn-empty');
   } else if (panel.id === 'panel-search') {
     if (state.searchMode === 'recipe-ingredient') {
       setSoftkeys('Back', 'Select', '');
@@ -1969,7 +2057,18 @@ function appendDiaryGroup(ul, label, groupEntries) {
   if (!groupEntries.length) return;
   var header = document.createElement('li');
   header.className = 'diary-group-header';
-  header.textContent = label;
+
+  var name = document.createElement('span');
+  name.className = 'diary-group-header-name';
+  name.textContent = label;
+
+  var totalCalories = groupEntries.reduce(function (sum, e) { return sum + (e.calories || 0); }, 0);
+  var total = document.createElement('span');
+  total.className = 'diary-group-header-calories';
+  total.textContent = Math.round(totalCalories) + ' cal';
+
+  header.appendChild(name);
+  header.appendChild(total);
   ul.appendChild(header);
   groupEntries.forEach(function (entry) { ul.appendChild(buildDiaryRow(entry)); });
 }
@@ -1993,15 +2092,25 @@ function renderDiary(callback) {
   });
 }
 
+// The single place that decides which macros show up and how they're
+// formatted — shared by the Diary/Servings/Recipe summary tables (`prefix`
+// is 'sum'/'serv'/'recipe', matching each panel's `#{prefix}-{key}` id
+// convention). Adding a macro in the future is just SUMMARY_KEYS + the 3
+// HTML rows, not 3 separate render functions each reimplementing this loop.
+function renderMacroSummary(prefix, values) {
+  SUMMARY_KEYS.forEach(function (k) {
+    var el = document.getElementById(prefix + '-' + k);
+    if (el) el.textContent = Math.round(values[k] || 0);
+  });
+}
+
 function renderDiarySummary(entries) {
   var totals = {};
   SUMMARY_KEYS.forEach(function (k) { totals[k] = 0; });
   entries.forEach(function (e) {
     SUMMARY_KEYS.forEach(function (k) { totals[k] += (e[k] || 0); });
   });
-  SUMMARY_KEYS.forEach(function (k) {
-    document.getElementById('sum-' + k).textContent = Math.round(totals[k]);
-  });
+  renderMacroSummary('sum', totals);
 }
 
 // ─── Screen: Search ───────────────────────────────────────────────────────────
@@ -2040,17 +2149,94 @@ document.getElementById('input-search').addEventListener('input', function (e) {
   _searchDebounce = setTimeout(function () { renderSearchResults(q); }, 150);
 });
 
+// ─── Remote catalog search (/search) ────────────────────────────────────────
+// Independent from the 150ms local-search debounce above — a much longer
+// (500ms) pause-based debounce, plus a hard single-flight guard, since this
+// hits a Lambda searching a 455K-row file rather than the small in-memory
+// local catalog. searchInProgress is never used to cancel/abort an in-flight
+// call — only to skip *starting* a new one while one is still outstanding.
+// If the debounce fires again mid-flight, that trigger is simply dropped;
+// the user accepted that tradeoff for bounded, predictable load on the
+// endpoint over guaranteeing every keystroke's final query gets searched.
+var _remoteSearchDebounce = null;
+var searchInProgress = false;
+
+document.getElementById('input-search').addEventListener('input', function (e) {
+  var q = e.target.value;
+  clearTimeout(_remoteSearchDebounce);
+  _remoteSearchDebounce = setTimeout(function () { triggerRemoteSearch(q); }, 500);
+});
+
+function triggerRemoteSearch(rawQuery) {
+  if (searchInProgress) return; // one already in flight — drop this trigger, don't queue it
+  // No ingredient-picker equivalent of the scan/UPC "hit" flow below (it
+  // always commits straight to the diary) — remote search only makes sense
+  // for the normal add-to-diary search.
+  if (state.searchMode === 'recipe-ingredient') return;
+  var q = rawQuery.trim();
+  if (!q) return;
+
+  searchInProgress = true;
+  xhrPostJson(SEARCH_URL, { query: q })
+    .then(function (res) {
+      var results = (res.status === 200 && Array.isArray(res.data)) ? res.data : [];
+      renderRemoteSearchResults(q, results);
+    })
+    .catch(function () {
+      // Network hiccup — non-fatal, just no remote rows this time.
+    })
+    .then(function () {
+      // Released once this call has settled either way (rendered, discarded
+      // as stale, or errored) — never only on a successful render, or a
+      // single stale/failed response would leave every future remote search
+      // permanently blocked.
+      searchInProgress = false;
+    });
+}
+
+// Async by the time this runs (500ms debounce + a network round trip), so
+// #search-ul may have been fully rebuilt by the 150ms local-search debounce
+// one or more times since this request went out — same staleness-guard
+// idiom renderUpcSearchResult/resolveRemoteUpcLookup already use elsewhere
+// in this file (re-check the live query/panel before touching the DOM).
+function renderRemoteSearchResults(query, results) {
+  if (document.getElementById('input-search').value.trim() !== query) return;
+  var panel = activePanel();
+  if (!panel || panel.id !== 'panel-search') return;
+  var anchor = document.getElementById('search-add-new-food');
+  if (!anchor) return;
+
+  var ul = document.getElementById('search-ul');
+  results.forEach(function (r) {
+    var li = document.createElement('li');
+    li.className = 'search-row';
+    li.setAttribute('nav-selectable', 'true');
+    var nameSpan = document.createElement('span');
+    nameSpan.textContent = r.name;
+    var tag = document.createElement('span');
+    tag.className = 'recipe-tag';
+    tag.textContent = 'Catalog';
+    li.appendChild(nameSpan);
+    li.appendChild(tag);
+    // Only a name+UPC pointer, not a full food record — same entry point a
+    // real barcode scan or manually-typed UPC uses (local-mapping check,
+    // then remote /lookup-upc, auto-add on a hit or "Barcode not found").
+    li.addEventListener('click', function () { handleScannedUpc([r.upc]); });
+    ul.insertBefore(li, anchor);
+  });
+}
+
 function renderSearchResults(query) {
   var ul = document.getElementById('search-ul');
   ul.innerHTML = '';
-  var q = query.trim().toLowerCase();
+  var q = normalizeForSearch(query.trim());
   var pickingIngredient = state.searchMode === 'recipe-ingredient';
   var results = q ? state.allFoods.filter(function (f) {
     if (f.deleted === true) return false;
     // A recipe can't be an ingredient of another recipe — keeps nutrition
     // baked-in-once at each level, no chained/nested recompute chains.
     if (pickingIngredient && f.type === 'recipe') return false;
-    return f.name.toLowerCase().indexOf(q) !== -1;
+    return normalizeForSearch(f.name).indexOf(q) !== -1;
   }).sort(function (a, b) {
     var countA = state.usageCounts[a.id] || 0;
     var countB = state.usageCounts[b.id] || 0;
@@ -2096,6 +2282,7 @@ function renderSearchResults(query) {
     var upcQuery = /^\d{12,14}$/.test(query.trim()) ? query.trim() : null;
 
     var addNew = document.createElement('li');
+    addNew.id = 'search-add-new-food'; // anchor for renderRemoteSearchResults' async insertBefore
     addNew.className = 'search-row add-new';
     addNew.setAttribute('nav-selectable', 'true');
     addNew.textContent = '+ Add new food';
@@ -2426,11 +2613,11 @@ document.getElementById('input-scan-match-search').addEventListener('input', fun
 function renderScanMatchResults(query) {
   var ul = document.getElementById('scan-match-ul');
   ul.innerHTML = '';
-  var q = query.trim().toLowerCase();
+  var q = normalizeForSearch(query.trim());
   var results = q ? state.allFoods.filter(function (f) {
     if (f.deleted === true) return false;
     if (f.type === 'recipe') return false;
-    return f.name.toLowerCase().indexOf(q) !== -1;
+    return normalizeForSearch(f.name).indexOf(q) !== -1;
   }).sort(function (a, b) {
     var countA = state.usageCounts[a.id] || 0;
     var countB = state.usageCounts[b.id] || 0;
@@ -2780,17 +2967,15 @@ function renderServingsPreview() {
   } else {
     values = state.editingEntry || {};
   }
-  SUMMARY_KEYS.forEach(function (k) {
-    var el = document.getElementById('serv-' + k);
-    if (el) el.textContent = Math.round(values[k] || 0);
-  });
+  renderMacroSummary('serv', values);
   renderNutrientTable('servings-nutrients', values);
 }
 
 // Shared by the Servings panel and the Recipe Builder's live preview — any
-// key on `values` that isn't one of the summary numbers (calories/fat/
-// carbs/protein/caffeine, shown separately) or a non-nutrient bookkeeping
-// field (id/date/foodId/etc.) gets its own row here.
+// key on `values` that isn't one of the SUMMARY_KEYS macros (calories/fat/
+// carbs/protein/caffeine/alcohol, shown separately via renderMacroSummary)
+// or a non-nutrient bookkeeping field (id/date/foodId/etc.) gets its own
+// row here.
 function renderNutrientTable(containerId, values) {
   var container = document.getElementById(containerId);
   container.innerHTML = '';
@@ -3614,10 +3799,7 @@ function renderRecipePreview() {
   Object.keys(totals).forEach(function (key) {
     values[key] = servingsCount ? totals[key] / servingsCount : 0;
   });
-  SUMMARY_KEYS.forEach(function (k) {
-    var el = document.getElementById('recipe-' + k);
-    if (el) el.textContent = Math.round(values[k] || 0);
-  });
+  renderMacroSummary('recipe', values);
   renderNutrientTable('recipe-nutrients', values);
 }
 
@@ -3944,6 +4126,7 @@ function refreshOptionsAccountRow() {
 function showOptionsPanel() {
   document.getElementById('opt-version').textContent = APP_VERSION;
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
+  document.getElementById('opt-show-alcohol-value').textContent = getShowAlcohol() ? 'On' : 'Off';
   document.getElementById('opt-after-add-food-value').textContent = getAfterAddFood() === 'modify' ? 'Modify servings' : 'Return to diary';
   document.getElementById('opt-meals-enabled-value').textContent = getMealsEnabled() ? 'On' : 'Off';
   document.getElementById('opt-require-meal-selection-value').textContent = getRequireMealSelection() ? 'On' : 'Off';
@@ -4027,6 +4210,11 @@ document.getElementById('opt-my-foods').addEventListener('click', function () {
 document.getElementById('opt-show-caffeine').addEventListener('click', function () {
   setShowCaffeine(!getShowCaffeine());
   document.getElementById('opt-show-caffeine-value').textContent = getShowCaffeine() ? 'On' : 'Off';
+});
+
+document.getElementById('opt-show-alcohol').addEventListener('click', function () {
+  setShowAlcohol(!getShowAlcohol());
+  document.getElementById('opt-show-alcohol-value').textContent = getShowAlcohol() ? 'On' : 'Off';
 });
 
 document.getElementById('opt-after-add-food').addEventListener('click', function () {
@@ -4436,6 +4624,7 @@ function logOutAllDevices() {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 applyCaffeineVisibility();
+applyAlcoholVisibility();
 setAuthDotState();
 
 openDB(function () {

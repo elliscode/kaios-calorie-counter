@@ -101,7 +101,7 @@ test('"Modify servings" combined with mandatory meal selection: the meal field i
   await page.locator('#sk-center').click();
 
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
-  await expect(page.locator('.diary-group-header')).toHaveText(['Lunch']);
+  await expect(page.locator('.diary-group-header-name')).toHaveText(['Lunch']);
 });
 
 test('"Modify servings": a multi-item Tray commit shows one confirmation per item, in sequence', async ({ page }) => {

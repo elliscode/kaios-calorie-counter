@@ -67,14 +67,19 @@ body.dark .food-row {
 
 /* === Diary meal group headers (see renderDiaryGrouped) === */
 .diary-group-header {
-  display: block;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
   padding: 10px 8px 4px;
   font-size: 11px;
   font-weight: 700;
-  text-transform: uppercase;
   color: #2E7D32;
   border-top: 1px solid #eee;
   margin-top: 4px;
+}
+
+.diary-group-header-name {
+  text-transform: uppercase;
 }
 
 .diary-group-header:first-child {

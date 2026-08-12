@@ -29,6 +29,7 @@ from calorie_api.account import (
 )
 from calorie_api.sync import sync_foods_route, sync_diary_route, sync_preferences_route
 from calorie_api.upc import lookup_upc_route
+from calorie_api.search import search_route
 
 
 def lambda_handler(event, context):
@@ -100,6 +101,8 @@ def route(event):
         return format_response(event=event, http_code=200, body={"status": "up"})
     if path_equals(event=event, method="POST", path="/lookup-upc"):
         return lookup_upc_route(event)
+    if path_equals(event=event, method="POST", path="/search"):
+        return search_route(event)
     if path_equals(event=event, method="POST", path="/submit"):
         return submit_food_route(event)
     if path_equals(event=event, method="POST", path="/submit-upc-mapping"):

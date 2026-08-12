@@ -321,6 +321,41 @@ body.dark .submit-button[nav-selected="true"] {
   box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.45);
 }
 
+/* ─── Larger touch targets for anything the user types/selects into ─────
+   (>240px touchscreen UI only) — bigger font and more breathing room around
+   the value, matching the same scale-up list.css already applies to
+   .options-row/.food-row at this breakpoint. Labels get a smaller bump so
+   the floated (active) state doesn't start crowding the value above it. */
+@media (min-width: 241px) {
+  .input-wrap input,
+  .input-wrap select {
+    padding: 18px 0 8px;
+    font-size: 18px;
+  }
+
+  .input-wrap-select select {
+    padding-top: 22px;
+  }
+
+  .input-wrap label {
+    top: 18px;
+    font-size: 16px;
+  }
+
+  .input-wrap input:not(:placeholder-shown) + label,
+  .input-wrap input:focus + label,
+  .input-wrap.has-value label,
+  .input-wrap-select label {
+    top: 0;
+    font-size: 13px;
+  }
+
+  .search-input {
+    font-size: 18px;
+    padding: 12px 8px;
+  }
+}
+
 /* ─── Arrow-key highlight suppressed until a key is actually pressed ────
    (>240px touchscreen UI only) — see the matching block in list.css for
    the full rationale. Every glow-ring rule here only ever adds
