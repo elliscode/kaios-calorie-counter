@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import pickle
 from datetime import datetime
 
 import json_stream
@@ -249,6 +250,19 @@ def parse_upc_replacement_file(file_path: str):
             line = f.readline()
     return output
 
+# Mirrors backend/lambda/calorie_api/search.py's _normalize_for_search /
+# _tokenize exactly — precomputing tokens here (once, at data-generation
+# time) instead of on every Lambda cold start, since the underlying names
+# are static between regenerations of this file.
+_search_punctuation_re = re.compile(r"[.,/#!$%^&*;:{}=\-_`~()'\"?\[\]\\|<>+@]")
+_search_whitespace_re = re.compile(r"\s+")
+
+def normalize_for_search(s):
+    return _search_whitespace_re.sub(" ", _search_punctuation_re.sub("", s.lower())).strip()
+
+def tokenize_for_search(s):
+    return [t for t in normalize_for_search(s).split(" ") if t]
+
 def get_search_strings(input_string:str):
     output = []
     parts = input_string.split()
@@ -354,7 +368,7 @@ with open("output_my_titlecase_04_2026.jsonl", "w") as output_file, open("output
             date_value = datetime.strptime(item['publicationDate'], "%m/%d/%Y")
             json_line = json.dumps({'name': name, 'upc': upc, 'date': date_value.date().isoformat(), 'servings': servings})
             output_file.write(json_line + "\n")
-            upc_file.write(f"{upc}\t{name}\n")
+            upc_file.write(f"{upc}\t{name}\t{' '.join(tokenize_for_search(name))}\n")
             count = count + 1
             if count > 10000:
                 write_servings(unique_servings)
@@ -364,5 +378,26 @@ with open("output_my_titlecase_04_2026.jsonl", "w") as output_file, open("output
 # Save to file
 with open('replacement-file.txt', 'w') as f:
     for key, value in replacement_servings.items():
-        f.write(f"{key}\t{value['q']}\t{value['unit']}")
+        f.write(f"{key}\t{value['q']}\t{value['unit']}\n")
 write_servings(unique_servings)
+
+
+# Pre-builds the exact [(tokens, name, upc), ...] structure
+# backend/lambda/calorie_api/search.py needs, deduped by name
+# (last-occurrence-in-file wins, same as that module's prior runtime
+# dedup) — so Lambda can pickle.loads() it directly on cold start instead
+# of re-parsing/re-deduping 455K lines of text on every one.
+def build_search_index(upc_tsv_path: str, output_pkl_path: str):
+    rows_by_name = {}
+    with open(upc_tsv_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.rstrip('\n')
+            if not line:
+                continue
+            upc, name, tokens_str = line.split('\t', 2)
+            tokens = tokens_str.split(' ') if tokens_str else []
+            rows_by_name[name] = (tokens, name, upc)
+    with open(output_pkl_path, 'wb') as f:
+        pickle.dump(list(rows_by_name.values()), f, protocol=4)
+
+build_search_index("output_upcs.tsv", "output_search_index.pkl")

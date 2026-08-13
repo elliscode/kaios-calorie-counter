@@ -124,6 +124,119 @@ test.describe('selecting a remote result', () => {
   });
 });
 
+// Remote catalog search now runs in recipe-ingredient mode too (previously
+// skipped entirely — see triggerRemoteSearch) — same backend call, same
+// renderRemoteSearchResults, so these results are identical to Diary
+// search's. Selecting one differs only in destination: Ingredient Quantity
+// instead of the diary.
+test.describe('recipe-ingredient mode', () => {
+  async function goToIngredientSearch(page, recipeName) {
+    await page.fill('#input-search', recipeName);
+    await page.waitForTimeout(250);
+    await page.locator('#panel-search .search-row.add-new-recipe').click();
+    await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+    await page.locator('#btn-recipe-add-ingredient').click();
+    await expect(page.locator('#panel-search')).toHaveAttribute('active', 'true');
+  }
+
+  test('remote results appear while picking an ingredient, same as Diary search', async ({ page }) => {
+    await page.route('https://api.calories.elliscode.com/search', function (route) {
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([{ name: 'Zesty Zucchini Chips', upc: '000111222333' }])
+      });
+    });
+
+    await goToIngredientSearch(page, 'my recipe');
+    await page.fill('#input-search', 'zucchini');
+    await page.waitForTimeout(700);
+
+    var remoteRow = page.locator('.search-row', { hasText: 'Zesty Zucchini Chips' });
+    await expect(remoteRow).toBeVisible();
+    await expect(remoteRow.locator('.recipe-tag')).toHaveText('Catalog');
+  });
+
+  test('selecting a remote result with a /lookup-upc hit creates the food locally and opens Ingredient Quantity for it', async ({ page }) => {
+    await page.route('https://api.calories.elliscode.com/search', function (route) {
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([{ name: 'Diet Cola', upc: '049000028911' }])
+      });
+    });
+    await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          name: 'Diet Cola',
+          upc: '049000028911',
+          servings: [{ name: 'can', quantity: 1, calories: 0, fat: 0, carbohydrates: 0, protein: 0 }]
+        })
+      });
+    });
+    var submitCalled = false;
+    await page.route('https://api.calories.elliscode.com/submit', function (route) {
+      submitCalled = true;
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
+    });
+
+    await goToIngredientSearch(page, 'my recipe');
+    await page.fill('#input-search', 'zzz-nonexistent-local-query');
+    await page.waitForTimeout(700);
+
+    await page.locator('.search-row', { hasText: 'Diet Cola' }).click();
+
+    await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
+    await expect(page.locator('#servings-panel-title')).toHaveText('Ingredient Quantity');
+    await expect(page.locator('#servings-food-name')).toHaveText('Diet Cola');
+    // Not submitted to the review queue until the ingredient is actually
+    // confirmed (see pendingIngredientUpc) — merely opening the quantity
+    // panel doesn't count as using it.
+    expect(submitCalled).toBe(false);
+
+    await page.locator('#sk-center').click(); // confirm the ingredient
+    await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+    await expect(page.locator('.recipe-ingredient-row', { hasText: 'Diet Cola' })).toBeVisible();
+    expect(submitCalled).toBe(true);
+  });
+
+  test('a remote result whose UPC already has a local mapping resolves straight to Ingredient Quantity, no /lookup-upc call', async ({ page }) => {
+    await page.route('https://api.calories.elliscode.com/search', function (route) {
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([{ name: 'Banana, Raw (Store Brand)', upc: '000111222555' }])
+      });
+    });
+    var lookupCalled = false;
+    await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
+      lookupCalled = true;
+      route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) });
+    });
+
+    await page.evaluate(function () {
+      return new Promise(function (resolve) {
+        window.dbBulkPutUpcMappings([{
+          upc: '000111222555',
+          foodId: '8c8fa111-5908-5fe6-991f-382f19200095', // Banana, Raw (tests/fixtures/sample-foods.json)
+          servingName: '1 medium',
+          servingQuantity: 1
+        }], resolve);
+      });
+    });
+
+    await goToIngredientSearch(page, 'my recipe');
+    await page.fill('#input-search', 'banana store brand');
+    await page.waitForTimeout(700);
+
+    await page.locator('.search-row', { hasText: 'Banana, Raw (Store Brand)' }).click();
+
+    await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
+    await expect(page.locator('#servings-panel-title')).toHaveText('Ingredient Quantity');
+    // Resolves to the real local food's own name, not the remote row's display text.
+    await expect(page.locator('#servings-food-name')).toHaveText('Banana, Raw');
+    expect(lookupCalled).toBe(false);
+  });
+});
+
 test('a response that arrives after the query has since changed is discarded, not inserted', async ({ page }) => {
   var resolveSearch;
   var searchResponse = new Promise(function (resolve) { resolveSearch = resolve; });

@@ -18,7 +18,7 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.43';
+var APP_VERSION = '3.0.44';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine', 'alcohol'];
 var NON_NUTRIENT_KEYS = [
@@ -50,6 +50,13 @@ var state = {
   // {onComplete, onCancel} while panel-servings is open in 'diary-add'
   // mode — see showDiaryAddConfirmPanel/commitDiaryAdd. null otherwise.
   pendingDiaryAdd: null,
+  // Set only when the food currently open in Ingredient Quantity
+  // (servingsMode 'recipe-ingredient') was just auto-created from a remote
+  // search pick (selectRemoteResultForRecipeIngredient) — holds its upc so
+  // addServingAsRecipeIngredient can submit it for review once the user
+  // actually confirms using it, never on a Back-out. Mirrors pendingDiaryAdd
+  // skipping submission on cancel for the diary-add path. null otherwise.
+  pendingIngredientUpc: null,
   // Where handleSoftLeft() sends Back from panel-my-foods/panel-my-recipes
   // — 'options' (the only route at ≤240px) unless the new >240px Foods &
   // Recipes chooser (panel-foods-recipes) was the one that opened it.
@@ -978,14 +985,12 @@ function xhrPostJson(url, body) {
 
 // ─── manifest.json check throttling ──────────────────────────────────────
 //
-// The food database only ever changes on Monday nights (the maintainer's
-// own update cadence) — hitting manifest.json on every single boot to
-// discover that nothing changed is wasted network/battery on a feature
-// phone. Instead: always check if the local DB has never been synced
-// (first launch, or after Clear Local DB); otherwise, only check again
-// once we've crossed the most recent Tuesday-8am boundary since our last
-// check — giving a buffer after the Monday-night update instead of racing
-// it, while still checking at most once a week the rest of the time.
+// Hitting manifest.json on every single boot to discover that nothing
+// changed is wasted network/battery on a feature phone. Instead: always
+// check if the local DB has never been synced (first launch, or after
+// Clear Local DB); otherwise, only check again once we've crossed
+// midnight (local time) since our last check — at most once per calendar
+// day, on whichever boot first happens after midnight.
 
 var MANIFEST_CHECK_KEY = 'lastManifestCheckAt';
 
@@ -1000,21 +1005,16 @@ function setLastManifestCheck(timestamp) {
   try { localStorage.setItem(MANIFEST_CHECK_KEY, String(timestamp)); } catch (e) { /* ignore */ }
 }
 
-// The most recent Tuesday 8am (local time) at or before `now`. Passing
-// `now` explicitly (rather than reading `new Date()` internally) keeps
-// this a pure, easily-testable function.
-function mostRecentTuesday8am(now) {
-  var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 0, 0, 0);
-  var daysSinceTuesday = (d.getDay() - 2 + 7) % 7; // getDay(): 0=Sun, 2=Tue
-  d.setDate(d.getDate() - daysSinceTuesday);
-  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 7); // it's Tuesday but before 8am
-  return d.getTime();
+// The most recent local midnight at or before `now`. Passing `now`
+// explicitly (rather than reading `new Date()` internally) keeps this a
+// pure, easily-testable function.
+function mostRecentMidnight(now) {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
 }
 
 function shouldCheckManifest(hasAnySyncedFiles, now) {
-  return true;
   if (!hasAnySyncedFiles) return true; // never synced, or DB was cleared — must bootstrap
-  return getLastManifestCheck() < mostRecentTuesday8am(now);
+  return getLastManifestCheck() < mostRecentMidnight(now);
 }
 
 // onFileStart(index, total, fileEntry) fires once per file, before it starts downloading.
@@ -1022,7 +1022,7 @@ function shouldCheckManifest(hasAnySyncedFiles, now) {
 // null if the server didn't send a Content-Length to compute a fraction from).
 // callback(filesDownloaded) reports how many files were actually pulled down, so callers
 // like forceCheckManifest() can tell the user "up to date" apart from "downloaded N files".
-// `force` skips the once-a-week throttle — used by that manual "Check for new data" action;
+// `force` skips the once-a-day throttle — used by that manual "Check for new data" action;
 // the normal boot-time call leaves it undefined/false and stays throttled as always.
 function syncData(onFileStart, onFileProgress, callback, force) {
   dbGetSyncedFileIds(function (syncedIds) {
@@ -1908,6 +1908,7 @@ function handleSoftLeft() {
     }
   } else if (panel.id === 'panel-servings') {
     if (state.servingsMode === 'recipe-ingredient') {
+      state.pendingIngredientUpc = null; // backing out — never submit an auto-created food the user didn't confirm using
       resumeRecipeBuilderPanel();
     } else if (state.servingsMode === 'diary-add') {
       var cancelled = state.pendingDiaryAdd;
@@ -2154,6 +2155,7 @@ function showSearchPanel() {
   document.getElementById('input-search').value = '';
   renderSearchResults('');
   setSoftkeys('Back', 'Add', 'Tray');
+  triggerWarmSearch();
 }
 
 // Picking a food to add as a recipe ingredient instead of logging it — see
@@ -2166,6 +2168,7 @@ function showSearchPanelForRecipeIngredient() {
   document.getElementById('input-search').value = '';
   renderSearchResults('');
   setSoftkeys('Back', 'Select', '');
+  triggerWarmSearch();
 }
 
 // Returning from New Food's Back action — unlike showSearchPanel(), this
@@ -2201,10 +2204,6 @@ document.getElementById('input-search').addEventListener('input', function (e) {
 
 function triggerRemoteSearch(rawQuery) {
   if (searchInProgress) return; // one already in flight — drop this trigger, don't queue it
-  // No ingredient-picker equivalent of the scan/UPC "hit" flow below (it
-  // always commits straight to the diary) — remote search only makes sense
-  // for the normal add-to-diary search.
-  if (state.searchMode === 'recipe-ingredient') return;
   var q = rawQuery.trim();
   if (!q) return;
 
@@ -2226,6 +2225,28 @@ function triggerRemoteSearch(rawQuery) {
     });
 }
 
+// Fired once when Search opens (both showSearchPanel and
+// showSearchPanelForRecipeIngredient — remote search now runs in both
+// modes) rather than on a debounce, since there's no keystroke to wait out
+// — the goal is to have
+// _search_rows already populated on the Lambda side by the time the user's
+// first real query lands. Shares searchInProgress with triggerRemoteSearch:
+// if a real search is already in flight this is dropped, and — same
+// tradeoff as a dropped keystroke search — if this warm call is still in
+// flight when the user immediately starts typing, that first debounce fire
+// is dropped too rather than queued.
+function triggerWarmSearch() {
+  if (searchInProgress) return;
+  searchInProgress = true;
+  xhrPostJson(SEARCH_URL, { action: 'warm' })
+    .catch(function () {
+      // Network hiccup — non-fatal, the first real search just won't be pre-warmed.
+    })
+    .then(function () {
+      searchInProgress = false;
+    });
+}
+
 // Async by the time this runs (500ms debounce + a network round trip), so
 // #search-ul may have been fully rebuilt by the 150ms local-search debounce
 // one or more times since this request went out — same staleness-guard
@@ -2235,10 +2256,16 @@ function renderRemoteSearchResults(query, results) {
   if (document.getElementById('input-search').value.trim() !== query) return;
   var panel = activePanel();
   if (!panel || panel.id !== 'panel-search') return;
-  var anchor = document.getElementById('search-add-new-food');
-  if (!anchor) return;
 
   var ul = document.getElementById('search-ul');
+  var pickingIngredient = state.searchMode === 'recipe-ingredient';
+  // Diary mode renders "+ Add new food/recipe/guesstimate" CTA rows at the
+  // bottom of #search-ul to insert remote rows above; recipe-ingredient
+  // mode renders none of those (see renderSearchResults' pickingIngredient
+  // branch), so there's nothing to anchor before there — append instead.
+  var anchor = pickingIngredient ? null : document.getElementById('search-add-new-food');
+  if (!pickingIngredient && !anchor) return; // diary mode's CTA row should always exist here; bail defensively if not
+
   results.forEach(function (r) {
     var li = document.createElement('li');
     li.className = 'search-row';
@@ -2250,11 +2277,16 @@ function renderRemoteSearchResults(query, results) {
     tag.textContent = 'Catalog';
     li.appendChild(nameSpan);
     li.appendChild(tag);
-    // Only a name+UPC pointer, not a full food record — same entry point a
-    // real barcode scan or manually-typed UPC uses (local-mapping check,
-    // then remote /lookup-upc, auto-add on a hit or "Barcode not found").
-    li.addEventListener('click', function () { handleScannedUpc([r.upc]); });
-    ul.insertBefore(li, anchor);
+    // Only a name+UPC pointer, not a full food record — resolved the same
+    // way a real barcode scan or manually-typed UPC would be (local-mapping
+    // check, then remote /lookup-upc), just landing in the diary or the
+    // recipe builder depending on which mode Search is currently in.
+    li.addEventListener('click', function () {
+      if (pickingIngredient) selectRemoteResultForRecipeIngredient(r.upc);
+      else handleScannedUpc([r.upc]);
+    });
+    if (anchor) ul.insertBefore(li, anchor);
+    else ul.appendChild(li);
   });
 }
 
@@ -2833,23 +2865,21 @@ function commitUpcMappedFoodToDiary(food, servingName, quantity) {
   });
 }
 
-// Behind-the-scenes equivalent of "Create new food using this UPC" (the New
-// Food panel path) — used when a remote UPC lookup result is tapped
-// directly instead of reviewed first. Trusts the looked-up servings as-is;
-// the resulting submission still goes through the same admin review queue
-// as any other (see postSubmitJson's upc param), so bad data never reaches
-// the shared catalog unreviewed even though it's usable in this diary
-// immediately. Always includes the upc (unlike submitNewFood, where it's
-// only sent if the user typed one in) — that's the whole point of this path.
-function autoCreateFoodFromUpcLookup(upc, lookupFood) {
+// Creates + persists a brand-new local food from a /lookup-upc hit —
+// shared by the diary auto-add path (autoCreateFoodFromUpcLookup) and the
+// recipe-ingredient equivalent (selectRemoteResultForRecipeIngredient).
+// Deliberately does NOT call submitNewFoodToApi itself — each destination
+// only proposes it to the shared review queue once its own user confirms
+// actually using it (gateOrAddToDiary's onComplete / addServingAsRecipeIngredient),
+// never on a cancel/Back-out, same as autoCreateFoodFromUpcLookup always has.
+function createFoodFromUpcLookup(upc, lookupFood, onCreated) {
   if (!lookupFood.servings || !lookupFood.servings.length) {
     showStatus('That UPC has no usable serving data', true);
     return;
   }
 
-  var id = generateGuid();
   var food = {
-    id: id,
+    id: generateGuid(),
     name: lookupFood.name,
     servings: lookupFood.servings,
     source: 'local',
@@ -2863,15 +2893,54 @@ function autoCreateFoodFromUpcLookup(upc, lookupFood) {
     // My Foods must show every locally-created food regardless of login
     // state. Submission itself is anonymous-friendly too, same as
     // submitNewFood — see its own comment for why.
-    dbPutMySubmission({ id: id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
-      var primary = food.servings[0];
-      gateOrAddToDiary(food, primary.name, primary.quantity, function () {
-        submitNewFoodToApi(id, food.name, food.servings, upc);
-        showDiaryPanel();
-        showStatus('Added ' + food.name, false);
-        syncAfterDiaryMutation();
-      });
+    dbPutMySubmission({ id: food.id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
+      onCreated(food);
     });
+  });
+}
+
+// Behind-the-scenes equivalent of "Create new food using this UPC" (the New
+// Food panel path) — used when a remote UPC lookup result is tapped
+// directly instead of reviewed first. Trusts the looked-up servings as-is;
+// the resulting submission still goes through the same admin review queue
+// as any other (see postSubmitJson's upc param), so bad data never reaches
+// the shared catalog unreviewed even though it's usable in this diary
+// immediately. Always includes the upc (unlike submitNewFood, where it's
+// only sent if the user typed one in) — that's the whole point of this path.
+function autoCreateFoodFromUpcLookup(upc, lookupFood) {
+  createFoodFromUpcLookup(upc, lookupFood, function (food) {
+    var primary = food.servings[0];
+    gateOrAddToDiary(food, primary.name, primary.quantity, function () {
+      submitNewFoodToApi(food.id, food.name, food.servings, upc);
+      showDiaryPanel();
+      showStatus('Added ' + food.name, false);
+      syncAfterDiaryMutation();
+    });
+  });
+}
+
+// Recipe-ingredient equivalent of handleScannedUpc's resolution order
+// (local mapping first, then remote lookup) — diverges only in the
+// destination: a resolved/created food opens the Ingredient Quantity panel
+// instead of committing to the diary. Submission to the review queue is
+// deferred to addServingAsRecipeIngredient (see pendingIngredientUpc) so
+// backing out without confirming never submits an unused food, same as
+// autoCreateFoodFromUpcLookup's diary-cancel behavior.
+function selectRemoteResultForRecipeIngredient(upc) {
+  resolveLocalUpcMapping(upc, function (hit) {
+    if (hit) { showRecipeIngredientQtyPanel(hit.food); return; }
+    xhrPostJson(LOOKUP_UPC_URL, { upc: upc })
+      .then(function (res) {
+        var lookupHit = res.status === 200 && res.data && res.data.servings && res.data.servings.length;
+        if (!lookupHit) { showStatus('Could not load that item, please try again', true); return; }
+        createFoodFromUpcLookup(upc, res.data, function (food) {
+          state.pendingIngredientUpc = upc;
+          showRecipeIngredientQtyPanel(food);
+        });
+      })
+      .catch(function () {
+        showStatus('Could not load that item, please try again', true);
+      });
   });
 }
 
@@ -3228,6 +3297,13 @@ function addServingAsRecipeIngredient() {
   if (!baseline || !qty) {
     showStatus('Enter a quantity', true);
     return;
+  }
+  // Only reaches the review queue once the user actually confirms using
+  // it as an ingredient — see selectRemoteResultForRecipeIngredient and
+  // handleSoftLeft's panel-servings/recipe-ingredient branch.
+  if (state.pendingIngredientUpc) {
+    submitNewFoodToApi(state.editingFood.id, state.editingFood.name, state.editingFood.servings, state.pendingIngredientUpc);
+    state.pendingIngredientUpc = null;
   }
   state.recipeBuilder.ingredients.push({
     foodId: state.editingFood.id,
@@ -4190,7 +4266,7 @@ function showOptionsPanel() {
 
 document.getElementById('opt-clear-db').addEventListener('click', confirmClearLocalDb);
 
-// Bypasses the normal once-a-week throttle (see shouldCheckManifest) at the
+// Bypasses the normal once-a-day throttle (see shouldCheckManifest) at the
 // user's own request — reuses the same loading-screen UI the boot-time
 // sync already shows, then returns to Options with a status toast instead
 // of proceeding to the Diary panel the way the boot sync does.

@@ -895,8 +895,41 @@ function renderApprovedEditable(card, entry) {
   cancelBtn.addEventListener('click', function () { renderApprovedReadOnly(card, entry); });
   actions.appendChild(cancelBtn);
 
+  const deleteBtn = document.createElement('button');
+  deleteBtn.type = 'button';
+  deleteBtn.className = 'reject';
+  deleteBtn.innerText = 'Delete';
+  deleteBtn.addEventListener('click', function () { deleteApprovedFood(entry.key2, card); });
+  actions.appendChild(deleteBtn);
+
   fields.appendChild(actions);
   card.appendChild(fields);
+}
+
+// For an accidental Accept or a change of heart on an already-approved (but
+// not yet exported) item — reuses /admin/review's existing approved:false
+// path (the same one a pending item's Reject button hits), which is enough
+// to drop it out of both the "pending" and "approved" queries in
+// get_pending_route, i.e. exactly what pending Reject does, just from the
+// approved side. The underlying record isn't hard-deleted — it just sits
+// unreviewable until its normal 30-day TTL (see appendExpirationInfo).
+async function deleteApprovedFood(id, cardEl) {
+  if (!confirm('Delete this approved food? It will be removed from the export queue.')) return;
+  try {
+    const response = await fetch(`${BASE_URL}/review`, {
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ csrf: csrfToken, id: id, approved: false })
+    });
+    if (response.status >= 200 && response.status < 300) {
+      cardEl.remove();
+      currentApprovedFoods = currentApprovedFoods.filter(function (f) { return f.key2 !== id; });
+      approvedHeadingEl.style.display = approvedCardsDiv.children.length ? 'block' : 'none';
+      displayError('');
+      return;
+    }
+  } catch {}
+  displayError('Error deleting item, please try again.');
 }
 
 // Unlike reviewItem() (pending -> approved, moves/removes the card), this

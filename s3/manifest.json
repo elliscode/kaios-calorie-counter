@@ -3,6 +3,10 @@
     { "id": "2026-08-06-approved-foods", "url": "/2026-08-06-approved-foods.json" },
     { "id": "2026-08-06-upc-mappings", "type": "upc-mappings", "url": "/2026-08-06-upc-mappings.json" },
     { "id": "2026-08-11-approved-foods-2", "url": "/2026-08-11-approved-foods.json" },
-    { "id": "2026-08-11-upc-mappings-2", "type": "upc-mappings", "url": "/2026-08-11-upc-mappings.json" }
+    { "id": "2026-08-11-upc-mappings-2", "type": "upc-mappings", "url": "/2026-08-11-upc-mappings.json" },
+    { "id": "2026-08-12-approved-foods", "url": "/approved-foods-1786584641885.json" },
+    { "id": "2026-08-12-upc-mappings", "type": "upc-mappings", "url": "/upc-mappings-1786584644726.json" },
+    { "id": "2026-08-12-approved-foods", "url": "/approved-foods-1786661472768.json" },
+    { "id": "2026-08-12-upc-mappings", "type": "upc-mappings", "url": "/upc-mappings-1786661475871.json" }
   ]
 }

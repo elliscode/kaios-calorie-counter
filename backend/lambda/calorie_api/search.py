@@ -1,11 +1,16 @@
 import os
+import pickle
 import re
+import time
 
 import boto3
 
 from .utils import format_response, parse_body
 
 SEARCH_BUCKET = os.environ.get("SEARCH_BUCKET")
+# Names the pickle blob in S3 (backend/data-prep/output_search_index.pkl),
+# not the .tsv it's built from — see build_search_index() in
+# convert_for_kaios_barcode_dynamodb.py.
 SEARCH_FILE = os.environ.get("SEARCH_FILE")
 SEARCH_LIMIT = int(os.environ.get("SEARCH_LIMIT", "100"))
 
@@ -14,9 +19,11 @@ s3 = boto3.client("s3")
 # Populated lazily on first use, then reused for the life of the warm
 # Lambda container — the backing file is ~455K rows (~30MB), too big to
 # re-fetch/re-parse from S3 on every invocation.
-_search_index = None  # {name: upc}
-_search_rows = None  # [(name_tokens, name, upc), ...] — precomputed once so
-# tokenizing isn't re-run on all 455K names on every single request.
+_search_rows = None  # [(name_tokens, name, upc), ...] — comes pre-deduped
+# and pre-tokenized straight out of the pickle blob (see
+# backend/data-prep/convert_for_kaios_barcode_dynamodb.py's
+# build_search_index), so cold start does one deserialize instead of
+# parsing/deduping 455K lines of text every time.
 
 # Mirrors frontend-v3/app.js's SEARCH_PUNCTUATION_REGEX/normalizeForSearch
 # exactly — punctuation stripped (not replaced with a space) from both the
@@ -62,17 +69,18 @@ def _match_score(query_tokens, name_tokens):
 
 
 def _load_search_index():
-    global _search_index, _search_rows
+    global _search_rows
+
+    start = time.perf_counter()
+
     obj = s3.get_object(Bucket=SEARCH_BUCKET, Key=SEARCH_FILE)
-    text = obj["Body"].read().decode("utf-8")
-    index = {}
-    for line in text.splitlines():
-        if not line:
-            continue
-        upc, name = line.split("\t", 1)
-        index[name] = upc  # last occurrence in the file wins on duplicate names
-    _search_index = index
-    _search_rows = [(_tokenize(name), name, upc) for name, upc in index.items()]
+    print(f"S3 get_object: {time.perf_counter() - start:.3f}s")
+
+    raw = obj["Body"].read()
+    print(f"Download/read: {time.perf_counter() - start:.3f}s")
+
+    _search_rows = pickle.loads(raw)
+    print(f"Unpickle rows: {time.perf_counter() - start:.3f}s")
 
 
 def _get_search_rows():
@@ -91,6 +99,10 @@ def _get_search_rows():
 # single-character queries that match a large fraction of the catalog).
 def search_route(event):
     body = parse_body(event.get("body"))
+    if body.get("action") == "warm":
+        _get_search_rows()
+        return format_response(event=event, http_code=200, body={"warmed": True})
+
     query_tokens = _tokenize(str(body.get("query") or "").strip())
     if not query_tokens:
         return format_response(event=event, http_code=200, body=[])

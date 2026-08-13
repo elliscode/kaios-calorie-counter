@@ -38,6 +38,19 @@ async function mockDataHost(page, opts) {
   await page.route('https://calories.elliscode.com/sample-foods.json', function (route) {
     route.fulfill({ path: path.join(__dirname, 'fixtures/sample-foods.json') });
   });
+  // Default catch-all for /search — showSearchPanel() fires a warm request
+  // the instant Search opens (see triggerWarmSearch in app.js), so every
+  // test that navigates to Search now issues a /search call whether or not
+  // it cares about remote search. Without this, that call would fall
+  // through to the real network. { warmed: true } is a safe default response
+  // for a real query too — it's not an array, so triggerRemoteSearch treats
+  // it as zero remote results (see its `Array.isArray(res.data)` check).
+  // Tests that care about remote search results/warm-call timing override
+  // this with their own more specific page.route('.../search', ...) — the
+  // most recently registered route wins.
+  await page.route('https://api.calories.elliscode.com/search', function (route) {
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ warmed: true }) });
+  });
 }
 
 // KaiOS softkeys ('SoftLeft'/'SoftRight') aren't real browser keys Playwright

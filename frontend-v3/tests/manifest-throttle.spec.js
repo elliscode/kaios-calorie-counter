@@ -34,14 +34,14 @@ test('re-launching shortly after a sync does not re-check manifest.json', async 
   expect(calls.manifest).toBe(1); // still 1 -- not called again
 });
 
-test('a stale lastManifestCheckAt (before the most recent Tuesday 8am) triggers a re-check', async ({ page }) => {
+test('a stale lastManifestCheckAt (before the most recent midnight) triggers a re-check', async ({ page }) => {
   var calls = await mockManifestWithCounter(page);
   await page.goto('/');
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
   expect(calls.manifest).toBe(1);
 
   // Force it to look like the last check was ages ago (epoch 0) -- always
-  // before any real Tuesday-8am boundary, regardless of when this test runs.
+  // before any real midnight boundary, regardless of when this test runs.
   await page.evaluate(function () {
     localStorage.setItem('lastManifestCheckAt', '0');
   });
@@ -122,35 +122,32 @@ test('"Check for new data" reports how many files were actually downloaded', asy
   await expect(page.locator('.status-toast')).toHaveText('Downloaded 1 new file');
 });
 
-test('mostRecentTuesday8am() computes the correct boundary for every day of the week', async ({ page }) => {
+test('mostRecentMidnight() computes the correct boundary regardless of time of day', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
 
   var result = await page.evaluate(function () {
-    function check(y, m, d, h) {
-      var now = new Date(y, m, d, h, 0, 0, 0);
-      return mostRecentTuesday8am(now);
+    function check(y, m, d, h, min) {
+      var now = new Date(y, m, d, h, min, 0, 0);
+      return mostRecentMidnight(now);
     }
-    // July 2026: Mon 27, Tue 28, Wed 29 ... (picking a known real week)
+    var midnightJuly28 = new Date(2026, 6, 28, 0, 0, 0, 0).getTime();
     return {
-      // Wednesday 29th at noon -> this week's Tuesday (28th) 8am
-      wednesday: check(2026, 6, 29, 12) === new Date(2026, 6, 28, 8, 0, 0, 0).getTime(),
-      // Tuesday 28th at 9am (after 8am) -> today, the 28th, 8am
-      tuesdayAfter8: check(2026, 6, 28, 9) === new Date(2026, 6, 28, 8, 0, 0, 0).getTime(),
-      // Tuesday 28th at 6am (before 8am) -> last week's Tuesday (21st) 8am
-      tuesdayBefore8: check(2026, 6, 28, 6) === new Date(2026, 6, 21, 8, 0, 0, 0).getTime(),
-      // Monday 27th (any time) -> last week's Tuesday (21st) 8am, not this week's
-      monday: check(2026, 6, 27, 23) === new Date(2026, 6, 21, 8, 0, 0, 0).getTime(),
-      // Sunday 26th -> last week's Tuesday (21st) 8am
-      sunday: check(2026, 6, 26, 12) === new Date(2026, 6, 21, 8, 0, 0, 0).getTime()
+      // Just after midnight -> today's midnight
+      justAfterMidnight: check(2026, 6, 28, 0, 1) === midnightJuly28,
+      // Noon -> today's midnight
+      noon: check(2026, 6, 28, 12, 0) === midnightJuly28,
+      // Just before the next midnight -> still today's midnight
+      justBeforeNextMidnight: check(2026, 6, 28, 23, 59) === midnightJuly28,
+      // Exactly midnight -> today's midnight, not yesterday's
+      exactlyMidnight: check(2026, 6, 28, 0, 0) === midnightJuly28
     };
   });
 
   expect(result).toEqual({
-    wednesday: true,
-    tuesdayAfter8: true,
-    tuesdayBefore8: true,
-    monday: true,
-    sunday: true
+    justAfterMidnight: true,
+    noon: true,
+    justBeforeNextMidnight: true,
+    exactlyMidnight: true
   });
 });

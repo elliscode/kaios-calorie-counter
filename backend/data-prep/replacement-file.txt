@@ -2725,4 +2725,11 @@ Cookies & Crme Cheerios Protein 1 Cup	37	g
 21	21	g
 85	85	g
 65	65	g
-3/4 Tsp (6 G) Makes 1 Cup Prepared	0.75	teaspoonWheat Chex 1 Cup	1	cupCookie Crisp 1 Cup	1	cupBlueberry Chex 1 Cup	1	cupReese's Puffs Treats 1 Bar	1	barAs Packaged Golden Graham S'Mores	1	packageReese's Puffs Minis 1 Cup	1	cupPer 1/3 Cup Dry Mix	0.333	cup
+3/4 Tsp (6 G) Makes 1 Cup Prepared	0.75	teaspoon
+Wheat Chex 1 Cup	1	cup
+Blueberry Chex 1 Cup	1	cup
+Blueberry Chex 1 Cup	1	cup
+Reese's Puffs Treats 1 Bar	1	bar
+As Packaged Golden Graham S'Mores	1	s'mores
+Reese's Puffs Minis 1 Cup	1	cup
+Per 1/3 Cup Dry Mix	0.3333333333333333	cup

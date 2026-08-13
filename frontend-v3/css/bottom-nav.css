@@ -14,6 +14,12 @@
   height: 76px;
   padding: 8px 24px;
   z-index: 20;
+  /* The bar itself is a transparent strip with three round buttons in it —
+     without this, a tap anywhere in the empty space around those buttons
+     (but still inside the bar's fixed bounding box) would get swallowed by
+     the bar instead of reaching the diary content scrolled underneath it.
+     The buttons opt back in below. */
+  pointer-events: none;
 }
 
 #btn-diary-add-food {
@@ -42,6 +48,12 @@
     padding-bottom: 84px;
     overflow-x: hidden;
   }
+}
+
+#btn-bottom-nav-foods,
+#btn-bottom-nav-add,
+#btn-bottom-nav-settings {
+  pointer-events: auto;
 }
 
 #btn-bottom-nav-foods,
