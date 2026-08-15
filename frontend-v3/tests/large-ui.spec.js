@@ -174,7 +174,7 @@ test('at 240px (KaiOS width) the highlight is always visible regardless of prior
   await expect(firstRow).toHaveCSS('background-color', 'rgb(56, 142, 60)');
 });
 
-test('#btn-servings-delete is the >240px on-screen equivalent of #sk-right\'s Delete, and only shows for a real diary entry', async ({ page }) => {
+test('#btn-servings-delete is visible at this width too, and only shows for a real diary entry', async ({ page }) => {
   await goToSearchFromDiary(page);
   await page.fill('#input-search', 'apple');
   await page.waitForTimeout(250);

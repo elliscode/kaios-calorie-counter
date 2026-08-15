@@ -218,19 +218,22 @@ body.dark .secondary-button.danger[nav-selected="true"] {
   box-shadow: 0 0 0 3px rgba(229, 115, 115, 0.35);
 }
 
-/* #btn-servings-delete: >240px-only (mirrors every other new touchscreen-UI
-   affordance's base-hidden/media-shown convention) AND mode-gated — the
-   .mode-hidden class (toggled in app.js's show*Panel functions per
-   state.servingsMode) additionally hides it outside 'diary' mode, where
-   there's no real diary entry backing this screen to delete. */
-#btn-servings-delete {
-  display: none;
+/* #btn-servings-delete: shown at every width (not just >240px) — on KaiOS,
+   #sk-right's softkey "Delete" still works too (this is additive, not a
+   replacement), but the nutrient table above has no nav-selectable rows of
+   its own, so without something focusable below it, the D-pad "virtual
+   cursor" (see setFocus()/scrollToVisible() in app.js) has nowhere to land
+   that scrolls the bottom of the nutrition facts into view on that small a
+   screen. Mode-gated regardless of width — the .mode-hidden class (toggled
+   in app.js's show*Panel functions per state.servingsMode) hides it outside
+   'diary' mode, where there's no real diary entry backing this screen to
+   delete. */
+#btn-servings-delete:not(.mode-hidden) {
+  display: block;
 }
 
-@media (min-width: 241px) {
-  #btn-servings-delete:not(.mode-hidden) {
-    display: block;
-  }
+#btn-servings-delete.mode-hidden {
+  display: none;
 }
 
 .extra-serving-block {

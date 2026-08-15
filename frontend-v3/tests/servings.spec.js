@@ -55,6 +55,22 @@ test('right softkey deletes the entry', async ({ page }) => {
   await expect(page.locator('#sum-calories')).toHaveText('0');
 });
 
+// Default test viewport (240x294, see playwright.config.js) is the KaiOS
+// width — #btn-servings-delete used to be >240px-only, additive to the
+// softkey (see 'right softkey deletes the entry' above), not a
+// replacement for it.
+test('the on-screen Delete button also works at the KaiOS (≤240px) width, alongside the softkey', async ({ page }) => {
+  await page.locator('.food-row').click();
+  await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
+
+  await expect(page.locator('#btn-servings-delete')).toBeVisible();
+  await page.locator('#btn-servings-delete').click();
+
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('#diary-empty')).toBeVisible();
+  await expect(page.locator('#sum-calories')).toHaveText('0');
+});
+
 test('left softkey / Back discards edits without saving', async ({ page }) => {
   await page.locator('.food-row').click();
   await page.fill('#input-serving-qty', '999');

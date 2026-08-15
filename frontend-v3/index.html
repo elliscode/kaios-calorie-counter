@@ -11,14 +11,14 @@
   <meta property="og:description" content="Track your daily intake across devices">
   <meta property="og:image" content="https://calories.elliscode.com/img/banner-og.png">
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.44">
-  <link rel="stylesheet" href="css/header.css?v=3.0.44">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.44">
-  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.44">
-  <link rel="stylesheet" href="css/input.css?v=3.0.44">
-  <link rel="stylesheet" href="css/list.css?v=3.0.44">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.44">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.44">
+  <link rel="stylesheet" href="css/root.css?v=3.0.45">
+  <link rel="stylesheet" href="css/header.css?v=3.0.45">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.45">
+  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.45">
+  <link rel="stylesheet" href="css/input.css?v=3.0.45">
+  <link rel="stylesheet" href="css/list.css?v=3.0.45">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.45">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.45">
 </head>
 <body>
   <div id="root">
@@ -222,13 +222,17 @@
 
         <div class="nutrient-table" id="servings-nutrients"></div>
 
-        <!-- >240px touchscreen UI only — #sk-right's "Delete" softkey is
-             hidden at this width along with the rest of #softkey, so
-             deleting an entry needs an on-screen equivalent here. Shown
-             only in 'diary' mode (state.servingsMode) — matches
-             handleSoftRight()'s own gating in app.js, since 'recipe-
-             ingredient'/'diary-add' modes don't back a real diary entry to
-             delete. -->
+        <!-- Shown at every width, not just >240px touchscreen UI. On KaiOS
+             this is additive to #sk-right's "Delete" softkey, not a
+             replacement — on that small a screen the nutrient table above
+             has no nav-selectable rows of its own, so without a focusable
+             element below it the D-pad "virtual cursor" has nothing to
+             scroll to that reveals the bottom of the nutrition facts (see
+             setFocus()/scrollToVisible() in app.js). Shown only in 'diary'
+             mode (state.servingsMode) via css/input.css's .mode-hidden
+             toggle — matches handleSoftRight()'s own gating in app.js,
+             since 'recipe-ingredient'/'diary-add' modes don't back a real
+             diary entry to delete. -->
         <button id="btn-servings-delete" class="secondary-button danger" type="button" nav-selectable="true">Delete</button>
       </div>
     </div>
@@ -586,6 +590,6 @@
 
   </div>
   <script src="js/vendor/zxing.min.js"></script>
-  <script src="app.js?v=3.0.44"></script>
+  <script src="app.js?v=3.0.45"></script>
 </body>
 </html>
