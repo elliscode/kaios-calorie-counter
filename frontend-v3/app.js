@@ -18,7 +18,7 @@ var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.45';
+var APP_VERSION = '3.0.46';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine', 'alcohol'];
 var NON_NUTRIENT_KEYS = [
@@ -50,13 +50,6 @@ var state = {
   // {onComplete, onCancel} while panel-servings is open in 'diary-add'
   // mode — see showDiaryAddConfirmPanel/commitDiaryAdd. null otherwise.
   pendingDiaryAdd: null,
-  // Set only when the food currently open in Ingredient Quantity
-  // (servingsMode 'recipe-ingredient') was just auto-created from a remote
-  // search pick (selectRemoteResultForRecipeIngredient) — holds its upc so
-  // addServingAsRecipeIngredient can submit it for review once the user
-  // actually confirms using it, never on a Back-out. Mirrors pendingDiaryAdd
-  // skipping submission on cancel for the diary-add path. null otherwise.
-  pendingIngredientUpc: null,
   // Where handleSoftLeft() sends Back from panel-my-foods/panel-my-recipes
   // — 'options' (the only route at ≤240px) unless the new >240px Foods &
   // Recipes chooser (panel-foods-recipes) was the one that opened it.
@@ -1908,7 +1901,6 @@ function handleSoftLeft() {
     }
   } else if (panel.id === 'panel-servings') {
     if (state.servingsMode === 'recipe-ingredient') {
-      state.pendingIngredientUpc = null; // backing out — never submit an auto-created food the user didn't confirm using
       resumeRecipeBuilderPanel();
     } else if (state.servingsMode === 'diary-add') {
       var cancelled = state.pendingDiaryAdd;
@@ -2418,7 +2410,7 @@ function renderUpcSearchResult(upc) {
       var lookupFood = res.data;
 
       var useRow = insertUpcResultRow(lookupFood.name, function () {
-        autoCreateFoodFromUpcLookup(upc, lookupFood);
+        addUpcLookupHitToDiary(upc, lookupFood);
       });
 
       var createLi = document.createElement('li');
@@ -2633,7 +2625,7 @@ function showScanResultPanel(candidates) {
   resolveRemoteUpcLookup(candidates, 0);
 }
 
-// A hit here is applied immediately via autoCreateFoodFromUpcLookup — the
+// A hit here is applied immediately via addUpcLookupHitToDiary — the
 // same one-tap add already used for a UPC typed directly into the main
 // Search box (renderUpcSearchResult) — rather than making the user confirm
 // a match they just scanned. Only once every candidate has missed (no hit,
@@ -2655,7 +2647,7 @@ function resolveRemoteUpcLookup(candidates, i) {
     if (!panel || panel.id !== 'panel-scan-result') return;
     var hit = res.status === 200 && res.data && res.data.servings && res.data.servings.length;
     if (hit) {
-      autoCreateFoodFromUpcLookup(candidates[i], res.data);
+      addUpcLookupHitToDiary(candidates[i], res.data);
     } else {
       resolveRemoteUpcLookup(candidates, i + 1);
     }
@@ -2796,6 +2788,11 @@ function addFoodToDiaryDefault(food, callback, mealId) {
   var def = defaultServingForFood(food);
   var entry = buildDiaryEntry(food, def.serving, def.quantity, mealId);
   dbAddDiaryEntry(entry, function (newId) {
+    // No backing food record (a catalog pick — see addUpcLookupHitToDiary)
+    // means no id to track usage/last-serving against, same reasoning
+    // deleteDiaryEntry already applies on the way out — null isn't a valid
+    // IndexedDB key, so dbIncrementUsageCount(null, ...) would throw.
+    if (!food.id) { if (callback) callback(newId); return; }
     state.usageCounts[food.id] = (state.usageCounts[food.id] || 0) + 1;
     dbIncrementUsageCount(food.id, function () {
       rememberServing(food.id, def.serving.name, def.quantity, function () {
@@ -2844,6 +2841,8 @@ function addFoodToDiaryWithServing(food, servingName, quantity, callback, mealId
   var serving = food.servings.filter(function (s) { return s.name === servingName; })[0] || food.servings[0];
   var entry = buildDiaryEntry(food, serving, quantity, mealId);
   dbAddDiaryEntry(entry, function (newId) {
+    // See addFoodToDiaryDefault's identical guard for why.
+    if (!food.id) { if (callback) callback(newId); return; }
     state.usageCounts[food.id] = (state.usageCounts[food.id] || 0) + 1;
     dbIncrementUsageCount(food.id, function () {
       rememberServing(food.id, serving.name, quantity, function () {
@@ -2865,67 +2864,40 @@ function commitUpcMappedFoodToDiary(food, servingName, quantity) {
   });
 }
 
-// Creates + persists a brand-new local food from a /lookup-upc hit —
-// shared by the diary auto-add path (autoCreateFoodFromUpcLookup) and the
-// recipe-ingredient equivalent (selectRemoteResultForRecipeIngredient).
-// Deliberately does NOT call submitNewFoodToApi itself — each destination
-// only proposes it to the shared review queue once its own user confirms
-// actually using it (gateOrAddToDiary's onComplete / addServingAsRecipeIngredient),
-// never on a cancel/Back-out, same as autoCreateFoodFromUpcLookup always has.
-function createFoodFromUpcLookup(upc, lookupFood, onCreated) {
+// Behind-the-scenes equivalent of "Create new food using this UPC" (the New
+// Food panel path) — used when a remote UPC lookup result is tapped
+// directly instead of reviewed first. /lookup-upc and /search both read
+// from a separate, already-vetted USDA-derived table (see
+// backend/data-prep/convert_for_kaios_barcode_dynamodb.py) entirely
+// outside the admin moderation queue — so unlike a real "+ Add new food"
+// submission, this deliberately never creates a local foods record or
+// calls submitNewFoodToApi; that would just be proposing already-trusted
+// data back into the review queue as if it were unvetted. Builds a
+// transient, never-persisted pseudo-food straight from the lookup
+// response and runs it through the normal gateOrAddToDiary pipeline —
+// buildDiaryEntry/addFoodToDiaryDefault/addFoodToDiaryWithServing all
+// tolerate food.id being null, same as a guesstimate has no backing food.
+function addUpcLookupHitToDiary(upc, lookupFood) {
   if (!lookupFood.servings || !lookupFood.servings.length) {
     showStatus('That UPC has no usable serving data', true);
     return;
   }
-
-  var food = {
-    id: generateGuid(),
-    name: lookupFood.name,
-    servings: lookupFood.servings,
-    source: 'local',
-    updated: nowSec(),
-    deleted: false
-  };
-
-  dbBulkPutFoods([food], function () {
-    state.allFoods.push(food);
-    state.foodsById[food.id] = food;
-    // My Foods must show every locally-created food regardless of login
-    // state. Submission itself is anonymous-friendly too, same as
-    // submitNewFood — see its own comment for why.
-    dbPutMySubmission({ id: food.id, createdAt: nowSec(), submittedAt: null, submitStatus: 'local' }, function () {
-      onCreated(food);
-    });
-  });
-}
-
-// Behind-the-scenes equivalent of "Create new food using this UPC" (the New
-// Food panel path) — used when a remote UPC lookup result is tapped
-// directly instead of reviewed first. Trusts the looked-up servings as-is;
-// the resulting submission still goes through the same admin review queue
-// as any other (see postSubmitJson's upc param), so bad data never reaches
-// the shared catalog unreviewed even though it's usable in this diary
-// immediately. Always includes the upc (unlike submitNewFood, where it's
-// only sent if the user typed one in) — that's the whole point of this path.
-function autoCreateFoodFromUpcLookup(upc, lookupFood) {
-  createFoodFromUpcLookup(upc, lookupFood, function (food) {
-    var primary = food.servings[0];
-    gateOrAddToDiary(food, primary.name, primary.quantity, function () {
-      submitNewFoodToApi(food.id, food.name, food.servings, upc);
-      showDiaryPanel();
-      showStatus('Added ' + food.name, false);
-      syncAfterDiaryMutation();
-    });
+  var food = { id: null, name: lookupFood.name, servings: lookupFood.servings, upc: upc };
+  var primary = food.servings[0];
+  gateOrAddToDiary(food, primary.name, primary.quantity, function () {
+    showDiaryPanel();
+    showStatus('Added ' + food.name, false);
+    syncAfterDiaryMutation();
   });
 }
 
 // Recipe-ingredient equivalent of handleScannedUpc's resolution order
 // (local mapping first, then remote lookup) — diverges only in the
-// destination: a resolved/created food opens the Ingredient Quantity panel
-// instead of committing to the diary. Submission to the review queue is
-// deferred to addServingAsRecipeIngredient (see pendingIngredientUpc) so
-// backing out without confirming never submits an unused food, same as
-// autoCreateFoodFromUpcLookup's diary-cancel behavior.
+// destination: a resolved food opens the Ingredient Quantity panel instead
+// of committing to the diary. Same reasoning as addUpcLookupHitToDiary for
+// never creating a local food/submitting to moderation — a transient
+// pseudo-food is enough; addServingAsRecipeIngredient/
+// computeIngredientNutrients handle one with no foodId directly.
 function selectRemoteResultForRecipeIngredient(upc) {
   resolveLocalUpcMapping(upc, function (hit) {
     if (hit) { showRecipeIngredientQtyPanel(hit.food); return; }
@@ -2933,10 +2905,7 @@ function selectRemoteResultForRecipeIngredient(upc) {
       .then(function (res) {
         var lookupHit = res.status === 200 && res.data && res.data.servings && res.data.servings.length;
         if (!lookupHit) { showStatus('Could not load that item, please try again', true); return; }
-        createFoodFromUpcLookup(upc, res.data, function (food) {
-          state.pendingIngredientUpc = upc;
-          showRecipeIngredientQtyPanel(food);
-        });
+        showRecipeIngredientQtyPanel({ id: null, name: res.data.name, servings: res.data.servings, upc: upc });
       })
       .catch(function () {
         showStatus('Could not load that item, please try again', true);
@@ -2974,6 +2943,11 @@ function buildDiaryEntry(food, servingObj, qty, mealId) {
     mealId: mealId || null,
     deleted: false
   };
+  // Only ever set on a transient, unpersisted pseudo-food (see
+  // addUpcLookupHitToDiary) — a catalog pick with no local foods record
+  // backing it (foodId stays null, same as a guesstimate) still carries
+  // its UPC through for traceability.
+  if (food.upc) entry.upc = food.upc;
   Object.keys(servingObj).forEach(function (key) {
     if (key === 'name' || key === 'quantity') return;
     entry[key] = round2(servingObj[key] * scale);
@@ -3298,19 +3272,23 @@ function addServingAsRecipeIngredient() {
     showStatus('Enter a quantity', true);
     return;
   }
-  // Only reaches the review queue once the user actually confirms using
-  // it as an ingredient — see selectRemoteResultForRecipeIngredient and
-  // handleSoftLeft's panel-servings/recipe-ingredient branch.
-  if (state.pendingIngredientUpc) {
-    submitNewFoodToApi(state.editingFood.id, state.editingFood.name, state.editingFood.servings, state.pendingIngredientUpc);
-    state.pendingIngredientUpc = null;
-  }
-  state.recipeBuilder.ingredients.push({
-    foodId: state.editingFood.id,
-    foodName: state.editingFood.name,
+  var food = state.editingFood;
+  var ingredient = {
+    foodId: food.id,
+    foodName: food.name,
     servingName: baseline.name,
     quantity: qty
-  });
+  };
+  // A catalog pick (selectRemoteResultForRecipeIngredient) has no backing
+  // foods record — baseline here is the exact (unscaled) serving it was
+  // picked at (currentServingBaseline's state.editingFood branch), baked
+  // directly onto the ingredient so computeIngredientNutrients can rescale
+  // off it later without a state.foodsById lookup.
+  if (!food.id) {
+    ingredient.upc = food.upc;
+    ingredient.referenceServing = baseline;
+  }
+  state.recipeBuilder.ingredients.push(ingredient);
   resumeRecipeBuilderPanel();
 }
 
@@ -3810,7 +3788,16 @@ function showRecipeBuilderPanel(prefillName) {
 function showRecipeBuilderPanelForEdit(recipe) {
   state.recipeBuilder = {
     ingredients: (recipe.ingredients || []).map(function (ing) {
-      return { foodId: ing.foodId, foodName: ing.foodName, servingName: ing.servingName, quantity: ing.quantity };
+      var mapped = { foodId: ing.foodId, foodName: ing.foodName, servingName: ing.servingName, quantity: ing.quantity };
+      // A catalog-pick ingredient (no foodId) has no backing foods record
+      // to fall back on — upc/referenceServing must survive the round
+      // trip through an edit, or computeIngredientNutrients would have
+      // nothing left to compute from on the next Submit.
+      if (!ing.foodId) {
+        mapped.upc = ing.upc;
+        mapped.referenceServing = ing.referenceServing;
+      }
+      return mapped;
     }),
     editingId: recipe.id
   };
@@ -3839,8 +3826,16 @@ function resumeRecipeBuilderPanel() {
 // scale lookup isn't repeated in three places. Returns null if the food or
 // that exact serving isn't found locally (e.g. it vanished since picked).
 function computeIngredientNutrients(ing) {
-  var food = state.foodsById[ing.foodId];
-  var serving = food && food.servings.filter(function (s) { return s.name === ing.servingName; })[0];
+  var serving;
+  if (ing.foodId) {
+    var food = state.foodsById[ing.foodId];
+    serving = food && food.servings.filter(function (s) { return s.name === ing.servingName; })[0];
+  } else {
+    // A catalog-pick ingredient has no backing foods record — the exact
+    // serving it was picked at was baked directly onto it instead (see
+    // addServingAsRecipeIngredient).
+    serving = ing.referenceServing;
+  }
   if (!serving) return null;
   var scale = serving.quantity ? (ing.quantity / serving.quantity) : 0;
   var values = {};

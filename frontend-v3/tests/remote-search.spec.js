@@ -92,7 +92,7 @@ test('remote results render below local matches, above "+ Add new food", tagged 
 test.describe('selecting a remote result', () => {
   test.use({ viewport: { width: 241, height: 700 } });
 
-  test('a remote result with a /lookup-upc hit adds it to the diary, same as a scanned UPC', async ({ page }) => {
+  test('a remote result with a /lookup-upc hit adds it to the diary, without creating a foods record or submitting to moderation', async ({ page }) => {
     await page.route('https://api.calories.elliscode.com/search', function (route) {
       route.fulfill({
         contentType: 'application/json',
@@ -109,8 +109,14 @@ test.describe('selecting a remote result', () => {
         })
       });
     });
+    var submitCalled = false;
     await page.route('https://api.calories.elliscode.com/submit', function (route) {
+      submitCalled = true;
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
+    });
+
+    var foodsBefore = await page.evaluate(function () {
+      return new Promise(function (resolve) { window.dbGetAllFoods(resolve); });
     });
 
     await page.fill('#input-search', 'zzz-nonexistent-local-query');
@@ -121,6 +127,16 @@ test.describe('selecting a remote result', () => {
     await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
     await expect(page.locator('.status-toast')).toHaveText('Added Diet Cola');
     await expect(page.locator('.food-row-name')).toHaveText('Diet Cola');
+
+    // A catalog pick (/search + /lookup-upc both read from the already-
+    // vetted USDA-derived table) must never re-propose that data into the
+    // moderation queue, and must never create a local foods record for it
+    // either — the diary entry itself carries the denormalized macros/upc.
+    expect(submitCalled).toBe(false);
+    var foodsAfter = await page.evaluate(function () {
+      return new Promise(function (resolve) { window.dbGetAllFoods(resolve); });
+    });
+    expect(foodsAfter.length).toBe(foodsBefore.length);
   });
 });
 
@@ -156,7 +172,7 @@ test.describe('recipe-ingredient mode', () => {
     await expect(remoteRow.locator('.recipe-tag')).toHaveText('Catalog');
   });
 
-  test('selecting a remote result with a /lookup-upc hit creates the food locally and opens Ingredient Quantity for it', async ({ page }) => {
+  test('selecting a remote result with a /lookup-upc hit opens Ingredient Quantity for it, without creating a foods record or submitting to moderation', async ({ page }) => {
     await page.route('https://api.calories.elliscode.com/search', function (route) {
       route.fulfill({
         contentType: 'application/json',
@@ -169,7 +185,7 @@ test.describe('recipe-ingredient mode', () => {
         body: JSON.stringify({
           name: 'Diet Cola',
           upc: '049000028911',
-          servings: [{ name: 'can', quantity: 1, calories: 0, fat: 0, carbohydrates: 0, protein: 0 }]
+          servings: [{ name: 'can', quantity: 1, calories: 150, fat: 0, carbohydrates: 40, protein: 0 }]
         })
       });
     });
@@ -177,6 +193,10 @@ test.describe('recipe-ingredient mode', () => {
     await page.route('https://api.calories.elliscode.com/submit', function (route) {
       submitCalled = true;
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
+    });
+
+    var foodsBefore = await page.evaluate(function () {
+      return new Promise(function (resolve) { window.dbGetAllFoods(resolve); });
     });
 
     await goToIngredientSearch(page, 'my recipe');
@@ -188,15 +208,26 @@ test.describe('recipe-ingredient mode', () => {
     await expect(page.locator('#panel-servings')).toHaveAttribute('active', 'true');
     await expect(page.locator('#servings-panel-title')).toHaveText('Ingredient Quantity');
     await expect(page.locator('#servings-food-name')).toHaveText('Diet Cola');
-    // Not submitted to the review queue until the ingredient is actually
-    // confirmed (see pendingIngredientUpc) — merely opening the quantity
-    // panel doesn't count as using it.
-    expect(submitCalled).toBe(false);
 
     await page.locator('#sk-center').click(); // confirm the ingredient
     await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
-    await expect(page.locator('.recipe-ingredient-row', { hasText: 'Diet Cola' })).toBeVisible();
-    expect(submitCalled).toBe(true);
+    var ingredientRow = page.locator('.recipe-ingredient-row', { hasText: 'Diet Cola' });
+    await expect(ingredientRow).toBeVisible();
+    // computeIngredientNutrients has no foods record to look up for this
+    // ingredient — confirms its referenceServing fallback actually works,
+    // not just that nothing throws (0 calories would pass either way).
+    await expect(ingredientRow.locator('.food-row-calories')).toHaveText('150');
+
+    // Never submitted to moderation, before or after confirming — /search +
+    // /lookup-upc both already read from the vetted USDA-derived table.
+    // Never creates a local foods record either — the ingredient carries
+    // its own denormalized reference serving + upc instead (see
+    // addServingAsRecipeIngredient/computeIngredientNutrients).
+    expect(submitCalled).toBe(false);
+    var foodsAfter = await page.evaluate(function () {
+      return new Promise(function (resolve) { window.dbGetAllFoods(resolve); });
+    });
+    expect(foodsAfter.length).toBe(foodsBefore.length);
   });
 
   test('a remote result whose UPC already has a local mapping resolves straight to Ingredient Quantity, no /lookup-upc call', async ({ page }) => {

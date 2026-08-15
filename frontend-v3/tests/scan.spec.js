@@ -54,7 +54,7 @@ test('a scanned EAN_13 starting with 0 is tried as both the 13-digit and 12-digi
   expect(requestedUpcs).toEqual(['0049000028911', '049000028911']);
 });
 
-test('a scanned UPC with a lookup hit is added to the diary automatically, submitting the UPC along with it', async ({ page }) => {
+test('a scanned UPC with a lookup hit is added to the diary automatically, without creating a foods record or submitting to moderation', async ({ page }) => {
   await page.route('https://api.calories.elliscode.com/lookup-upc', function (route) {
     route.fulfill({
       contentType: 'application/json',
@@ -66,10 +66,14 @@ test('a scanned UPC with a lookup hit is added to the diary automatically, submi
     });
   });
 
-  var submitBody = null;
+  var submitCalled = false;
   await page.route('https://api.calories.elliscode.com/submit', function (route) {
-    submitBody = route.request().postDataJSON();
+    submitCalled = true;
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
+  });
+
+  var foodsBefore = await page.evaluate(function () {
+    return new Promise(function (resolve) { window.dbGetAllFoods(resolve); });
   });
 
   await scanBarcode(page, '049000028911');
@@ -80,11 +84,16 @@ test('a scanned UPC with a lookup hit is added to the diary automatically, submi
   await expect(page.locator('.status-toast')).toHaveText('Added Diet Cola');
   await expect(page.locator('.food-row-name')).toHaveText('Diet Cola');
 
-  await expect.poll(function () { return submitBody; }).toMatchObject({
-    name: 'Diet Cola',
-    upc: '049000028911',
-    servings: [{ name: 'can', quantity: 1, calories: 0, fat: 0, carbohydrates: 0, protein: 0 }]
+  // /lookup-upc reads from an already-vetted USDA-derived table, entirely
+  // outside the admin moderation queue — this must never re-propose that
+  // data back into it, and must never create a local foods record for it
+  // either (the diary entry carries its own denormalized macros + upc,
+  // same as a guesstimate has no backing food).
+  expect(submitCalled).toBe(false);
+  var foodsAfter = await page.evaluate(function () {
+    return new Promise(function (resolve) { window.dbGetAllFoods(resolve); });
   });
+  expect(foodsAfter.length).toBe(foodsBefore.length);
 });
 
 test('a new UPC with no lookup hit shows "Barcode not found"', async ({ page }) => {
