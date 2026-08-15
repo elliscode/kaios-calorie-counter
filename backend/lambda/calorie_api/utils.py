@@ -270,11 +270,38 @@ def load_encrypted_collection(key1, key2):
     return decrypt_field(dynamo_obj_to_python_obj(result["Item"])["data"], as_json=True)
 
 
-def store_encrypted_collection(key1, key2, data):
-    dynamo.put_item(
-        TableName=TABLE_NAME,
-        Item=python_obj_to_dynamo_obj({"key1": key1, "key2": key2, "data": encrypt_field(data)}),
-    )
+def store_encrypted_collection(key1, key2, data, expiration=None):
+    item = {"key1": key1, "key2": key2, "data": encrypt_field(data)}
+    if expiration is not None:
+        item["expiration"] = expiration
+    dynamo.put_item(TableName=TABLE_NAME, Item=python_obj_to_dynamo_obj(item))
+
+
+# Every item sharing a partition (key1) — e.g. every custom food or recipe
+# a single user owns, once a collection is split into its own per-user
+# partition (see sync.py's sync_partition) rather than one single-item
+# whole-collection blob. Paginates via LastEvaluatedKey since nothing
+# bounds how many rows a partition can hold.
+def query_encrypted_partition(key1):
+    items = {}
+    kwargs = {
+        "TableName": TABLE_NAME,
+        "KeyConditionExpression": "#key1 = :key1",
+        "ExpressionAttributeNames": {"#key1": "key1"},
+        "ExpressionAttributeValues": python_obj_to_dynamo_obj({":key1": key1}),
+    }
+    while True:
+        result = dynamo.query(**kwargs)
+        for item in result.get("Items", []):
+            obj = dynamo_obj_to_python_obj(item)
+            items[obj["key2"]] = decrypt_field(obj["data"], as_json=True)
+        if "LastEvaluatedKey" not in result:
+            return items
+        kwargs["ExclusiveStartKey"] = result["LastEvaluatedKey"]
+
+
+def delete_encrypted_item(key1, key2):
+    dynamo.delete_item(Key=python_obj_to_dynamo_obj({"key1": key1, "key2": key2}), TableName=TABLE_NAME)
 
 
 # A UPC identifies a *product*, not a food — many products (different sizes,
