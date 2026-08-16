@@ -11,14 +11,14 @@
   <meta property="og:description" content="Track your daily intake across devices">
   <meta property="og:image" content="https://calories.elliscode.com/img/banner-og.png">
 
-  <link rel="stylesheet" href="css/root.css?v=3.0.46">
-  <link rel="stylesheet" href="css/header.css?v=3.0.46">
-  <link rel="stylesheet" href="css/softkey.css?v=3.0.46">
-  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.46">
-  <link rel="stylesheet" href="css/input.css?v=3.0.46">
-  <link rel="stylesheet" href="css/list.css?v=3.0.46">
-  <link rel="stylesheet" href="css/sheet.css?v=3.0.46">
-  <link rel="stylesheet" href="css/loader.css?v=3.0.46">
+  <link rel="stylesheet" href="css/root.css?v=3.0.47">
+  <link rel="stylesheet" href="css/header.css?v=3.0.47">
+  <link rel="stylesheet" href="css/softkey.css?v=3.0.47">
+  <link rel="stylesheet" href="css/bottom-nav.css?v=3.0.47">
+  <link rel="stylesheet" href="css/input.css?v=3.0.47">
+  <link rel="stylesheet" href="css/list.css?v=3.0.47">
+  <link rel="stylesheet" href="css/sheet.css?v=3.0.47">
+  <link rel="stylesheet" href="css/loader.css?v=3.0.47">
 </head>
 <body>
   <div id="root">
@@ -356,6 +356,60 @@
       </div>
     </div>
 
+    <!-- Panel: Recipe Detail — read-only view of one of My Recipes, reached
+         by tapping a row in panel-my-recipes. Edit/Delete stay reachable
+         via the same openMyRecipeActionsSheet() as before (≤240px: right
+         softkey "Options"; >240px: #btn-recipe-detail-options, softkeys are
+         hidden at that width — see css/header.css's .header-action-btn
+         gating). #btn-recipe-share is shown at every width, unlike
+         .header-action-btn — same always-visible convention
+         #btn-servings-delete already established this session, since
+         there's no softkey-only alternative for Share on KaiOS. -->
+    <div id="panel-recipe-detail" class="panel" active="false">
+      <div class="header">
+        <h1 id="recipe-detail-name">Recipe</h1>
+        <button id="btn-recipe-detail-options" class="header-action-btn" type="button" nav-selectable="true" aria-label="Recipe options">⋯</button>
+        <span class="auth-status-text"></span>
+        <span class="auth-dot" aria-hidden="true"></span>
+      </div>
+      <div class="panel-content">
+        <span class="extra-serving-title">Ingredients</span>
+        <ul id="recipe-detail-ingredients-ul" class="item-list"></ul>
+
+        <p class="hint">Per serving</p>
+        <div class="summary-table" id="recipe-detail-summary">
+          <div class="summary-row">
+            <span class="summary-label">Calories</span>
+            <span class="summary-value"><span id="recipe-detail-calories">0</span></span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Fat</span>
+            <span class="summary-value"><span id="recipe-detail-fat">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Carbs</span>
+            <span class="summary-value"><span id="recipe-detail-carbohydrates">0</span> g</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">Protein</span>
+            <span class="summary-value"><span id="recipe-detail-protein">0</span> g</span>
+          </div>
+          <div class="summary-row" id="row-recipe-detail-caffeine">
+            <span class="summary-label">Caffeine</span>
+            <span class="summary-value"><span id="recipe-detail-caffeine">0</span> mg</span>
+          </div>
+          <div class="summary-row" id="row-recipe-detail-alcohol">
+            <span class="summary-label">Alcohol</span>
+            <span class="summary-value"><span id="recipe-detail-alcohol">0</span> g</span>
+          </div>
+        </div>
+
+        <div class="nutrient-table" id="recipe-detail-nutrients"></div>
+
+        <button id="btn-recipe-share" class="secondary-button" type="button" nav-selectable="true">Share</button>
+      </div>
+    </div>
+
     <!-- Panel: Guesstimate — deliberately minimal, just two fields -->
     <div id="panel-guesstimate" class="panel" active="false">
       <div class="header">
@@ -588,8 +642,20 @@
     <button id="topbar-back" type="button" aria-label="Back">&#8592;</button>
     <button id="topbar-accept" type="button" aria-label="Accept">&#10003;</button>
 
+    <!-- Full-screen "open in app"/import-status banner for the shared-
+         recipe handoff flow (see boot-time ?share= handling in app.js) —
+         a single big tap target, no nav-selectable/D-pad wiring at all,
+         since the KaiOS system browser doesn't reliably relay D-pad
+         events to arbitrary pages (mirrors kaios-shared-list's own
+         #open-in-app-banner, same reasoning). A plain <a href>, not
+         JS-driven navigation, so tapping it works even if the rest of
+         this app's own script is still deferred behind it. Reused for
+         both the initial "Click here to add…" prompt and the later
+         success/already-added status (href stripped for the latter). -->
+    <a id="share-handoff-banner" href="#" active="false"></a>
+
   </div>
   <script src="js/vendor/zxing.min.js"></script>
-  <script src="app.js?v=3.0.46"></script>
+  <script src="app.js?v=3.0.47"></script>
 </body>
 </html>

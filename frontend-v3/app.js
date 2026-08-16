@@ -13,12 +13,14 @@ var ACCOUNT_REFRESH_URL = API_HOST + '/account/refresh';
 var SYNC_FOODS_URL = API_HOST + '/sync/foods';
 var SYNC_DIARY_URL = API_HOST + '/sync/diary';
 var SYNC_PREFERENCES_URL = API_HOST + '/sync/preferences';
+var SHARE_RECIPE_URL = API_HOST + '/recipes/share';
+var GET_SHARED_RECIPE_URL = API_HOST + '/recipes/shared';
 // Must track backend/lambda/calorie_api/sync.py's DELETED_ITEM_RETENTION_DAYS —
 // local tombstones are purged on the same schedule the server purges its own,
 // so a device that's been offline a while doesn't hang onto dead rows any
 // longer than the server would anyway.
 var TOMBSTONE_RETENTION_DAYS = 120;
-var APP_VERSION = '3.0.46';
+var APP_VERSION = '3.0.47';
 
 var SUMMARY_KEYS = ['calories', 'fat', 'carbohydrates', 'protein', 'caffeine', 'alcohol'];
 var NON_NUTRIENT_KEYS = [
@@ -55,7 +57,12 @@ var state = {
   // Recipes chooser (panel-foods-recipes) was the one that opened it.
   // Options' own My Foods/My Recipes rows reset this to 'options' on every
   // click so stale state from an earlier chooser visit can't leak in.
-  myFoodsBackTo: 'options'
+  myFoodsBackTo: 'options',
+  // Which recipe panel-recipe-detail is currently showing — read by
+  // #btn-recipe-share/#btn-recipe-detail-options' click listeners and
+  // handleSoftRight (both attached once at load, not re-wired per open,
+  // same convention #btn-servings-delete's own single listener uses).
+  viewingRecipeId: null
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -1935,6 +1942,8 @@ function handleSoftLeft() {
   } else if (panel.id === 'panel-my-recipes') {
     if (state.myFoodsBackTo === 'foods-recipes') showFoodsRecipesPanel();
     else showOptionsPanel();
+  } else if (panel.id === 'panel-recipe-detail') {
+    showMyRecipesPanel();
   } else if (panel.id === 'panel-foods-recipes') {
     showDiaryPanel();
   } else if (panel.id === 'panel-meals') {
@@ -1954,6 +1963,8 @@ function handleSoftRight() {
     if (state.searchMode !== 'recipe-ingredient') addFocusedToTray();
   } else if (panel.id === 'panel-servings') {
     if (state.servingsMode === 'diary') deleteCurrentEntry();
+  } else if (panel.id === 'panel-recipe-detail') {
+    if (state.viewingRecipeId) openMyRecipeActionsSheet(state.viewingRecipeId);
   }
   // panel-options: no right-softkey action
 }
@@ -4036,9 +4047,51 @@ function renderMyRecipesList() {
 
     li.appendChild(name);
     li.appendChild(meta);
-    li.addEventListener('click', function () { openMyRecipeActionsSheet(recipe.id); });
+    li.addEventListener('click', function () { showRecipeDetailPanel(recipe.id); });
     ul.appendChild(li);
   });
+}
+
+// Read-only view of one recipe — Edit/Delete stay reachable from here via
+// the same openMyRecipeActionsSheet() used before this screen existed
+// (≤240px: right softkey "Options", see handleSoftRight; >240px:
+// #btn-recipe-detail-options, since softkeys are hidden at that width).
+// Share is the one new always-visible action (see index.html's comment on
+// #btn-recipe-share for why it isn't gated the same way).
+function showRecipeDetailPanel(recipeId) {
+  var recipe = state.foodsById[recipeId];
+  if (!recipe) { showStatus('Recipe data unavailable', true); return; }
+  state.viewingRecipeId = recipeId;
+
+  document.getElementById('recipe-detail-name').textContent = recipe.name;
+
+  var ul = document.getElementById('recipe-detail-ingredients-ul');
+  ul.innerHTML = '';
+  (recipe.ingredients || []).forEach(function (ing) {
+    var li = document.createElement('li');
+    // Deliberately not .recipe-ingredient-row — that class is the Recipe
+    // Builder's own ingredient rows (#recipe-ingredients-ul), a distinct
+    // <ul> that coexists in the DOM alongside this one; reusing the same
+    // class made a plain `.recipe-ingredient-row` query match rows from
+    // both panels regardless of which was actually visible.
+    li.className = 'food-row recipe-detail-ingredient-row';
+    var name = document.createElement('span');
+    name.className = 'food-row-name';
+    name.textContent = ing.foodName;
+    var qty = document.createElement('span');
+    qty.className = 'food-row-serving';
+    qty.textContent = formatQty(ing.quantity) + ' ' + ing.servingName;
+    li.appendChild(name);
+    li.appendChild(qty);
+    ul.appendChild(li);
+  });
+
+  var perServing = (recipe.servings && recipe.servings[0]) || {};
+  renderMacroSummary('recipe-detail', perServing);
+  renderNutrientTable('recipe-detail-nutrients', perServing);
+
+  showPanel('panel-recipe-detail');
+  setSoftkeys('Back', '', 'Options');
 }
 
 function openMyRecipeActionsSheet(recipeId) {
@@ -4062,6 +4115,79 @@ function editRecipe(recipeId) {
   showRecipeBuilderPanelForEdit(recipe);
 }
 
+// ─── Sharing a recipe ───────────────────────────────────────────────────────
+//
+// Fully denormalizes every ingredient's nutrition into the payload — via
+// computeIngredientNutrients, the exact same fallback that already lets a
+// catalog-pick ingredient (referenceServing, no foodId) work with no
+// backing food record — regardless of whether the ingredient here is
+// foodId-based or already referenceServing-based. This is what makes the
+// resulting share a fully self-contained snapshot: importing it on
+// another device never depends on that device having any particular
+// food/catalog state, including a custom food that only exists on this
+// device. An ingredient whose food/serving has since vanished locally is
+// silently dropped, same degrade-gracefully rule submitRecipe() already
+// applies when baking a recipe's own totals.
+function buildRecipeSharePayload(recipe) {
+  return {
+    name: recipe.name,
+    servings: recipe.servings,
+    servingsCount: recipe.servingsCount,
+    ingredients: recipe.ingredients.map(function (ing) {
+      var values = computeIngredientNutrients(ing);
+      return {
+        foodName: ing.foodName,
+        servingName: ing.servingName,
+        quantity: ing.quantity,
+        referenceServing: values ? Object.assign({ name: ing.servingName, quantity: ing.quantity }, values) : null
+      };
+    }).filter(function (ing) { return ing.referenceServing; })
+  };
+}
+
+function shareRecipe(recipeId) {
+  var recipe = state.foodsById[recipeId];
+  if (!recipe) return;
+  xhrPostJson(SHARE_RECIPE_URL, buildRecipeSharePayload(recipe))
+    .then(function (res) {
+      if (res.status !== 200 || !res.data || !res.data.id) {
+        showStatus('Could not prepare this recipe for sharing, please try again', true);
+        return;
+      }
+      openShareMethodSheet(recipe.name, res.data.id);
+    })
+    .catch(function () {
+      showStatus('Could not prepare this recipe for sharing, please try again', true);
+    });
+}
+
+// Mirrors kaios-shared-list's openShareSheet — same #sheet component, same
+// detached-<a>.click() trick for sms:/mailto: (a real href navigation, so
+// it doesn't lose app state the way window.location would).
+function openShareMethodSheet(recipeName, shareId) {
+  var url = DATA_HOST + '/?share=' + shareId;
+  var msg = 'I am sharing a recipe with you on KaiOS Calorie Counter: ' + url;
+  openSheet([
+    { label: 'Text Message', action: function () { openExternalShareLink('sms:?body=' + encodeURIComponent(msg)); } },
+    { label: 'Email', action: function () { openExternalShareLink('mailto:?subject=' + encodeURIComponent('Recipe: ' + recipeName) + '&body=' + encodeURIComponent(msg)); } },
+    { label: 'Cancel', action: function () { closeSheet(); } }
+  ], { title: recipeName, note: 'How would you like to share this recipe?' });
+}
+
+function openExternalShareLink(href) {
+  closeSheet();
+  var a = document.createElement('a');
+  a.href = href;
+  a.click();
+}
+
+document.getElementById('btn-recipe-share').addEventListener('click', function () {
+  if (state.viewingRecipeId) shareRecipe(state.viewingRecipeId);
+});
+document.getElementById('btn-recipe-detail-options').addEventListener('click', function () {
+  if (state.viewingRecipeId) openMyRecipeActionsSheet(state.viewingRecipeId);
+});
+
 function refreshOptionsMyRecipesCount() {
   var count = state.allFoods.filter(function (f) { return f.type === 'recipe' && f.deleted !== true; }).length;
   document.getElementById('opt-my-recipes-count').textContent = count ? String(count) : '';
@@ -4078,8 +4204,13 @@ document.getElementById('opt-my-recipes').addEventListener('click', function () 
 // explicitly includes local recipes (see its comment) — without that, a
 // tombstoned recipe would never be picked up by /sync/foods at all.
 function deleteRecipe(recipeId) {
+  // showMyRecipesPanel() (not just renderMyRecipesList()) since Delete is
+  // now also reachable from panel-recipe-detail (via its Options sheet) —
+  // that screen would otherwise be left showing a recipe that no longer
+  // exists. A no-op change when reached from panel-my-recipes itself,
+  // which was always already the active panel there.
   function afterUiUpdate() {
-    renderMyRecipesList();
+    showMyRecipesPanel();
     refreshOptionsMyRecipesCount();
     showStatus('Deleted', false);
     syncFoods();
@@ -4730,47 +4861,157 @@ function logOutAllDevices() {
   });
 }
 
+// ─── Shared-recipe handoff (?share=<id>[&handoff=1]) ───────────────────────
+//
+// Mirrors kaios-shared-list's own two-screen full-screen-tap pattern (see
+// that repo's CLAUDE.md "Sharing & app handoff" section) — the KaiOS
+// system browser doesn't reliably relay D-pad/keyboard events to arbitrary
+// pages (falls back to an on-screen mouse-cursor mode this app's
+// nav-selectable/setFocus UI doesn't work with), so a share link opened
+// there shows one big full-screen tap target instead of the normal UI,
+// and hands off to this app's own installed-app origin —
+// http://caloriecounter.localhost, from manifest.webmanifest's
+// "id": "calorie-counter" with hyphens stripped, the same platform
+// convention kaios-shared-list's own "id" maps to sharedlists.localhost
+// with — rather than trying to render the real UI inside that browser.
+var shareUrlParams = new URLSearchParams(location.search);
+var shareIdFromUrl = shareUrlParams.get('share');
+var shareHandoff = shareUrlParams.get('handoff') === '1';
+var isKaiosHandoffBrowser = !!shareIdFromUrl
+  && !location.hostname.endsWith('.localhost')
+  && /kaios/i.test(navigator.userAgent);
+
+function showShareHandoffBanner(text, href) {
+  var banner = document.getElementById('share-handoff-banner');
+  banner.textContent = text;
+  if (href) banner.setAttribute('href', href); else banner.removeAttribute('href');
+  banner.setAttribute('active', 'true');
+}
+
+// Fetches the shared snapshot and imports it as a new local recipe,
+// logging one serving to today's diary — same shape as submitRecipe()'s
+// own create path. `isHandoff` (still can't fully trust D-pad support
+// even at the .localhost origin — same conservative reasoning
+// kaios-shared-list's own "Success!" banner reuse documents) shows the
+// same full-screen banner as a status message instead of proceeding into
+// the normal Diary view; otherwise (non-KaiOS, or KaiOS but not via the
+// banner redirect) the normal Diary panel is used, exactly as it would be
+// for any other newly-added recipe.
+function importSharedRecipe(snapshot, shareId, isHandoff) {
+  // Derived directly from the share id (not a fresh generateGuid() each
+  // time) so re-opening the exact same link — a double-tap, or the same
+  // message opened again weeks later — resolves to the exact same local
+  // foods record every time: dbBulkPutFoods overwrites it in place
+  // instead of creating a second copy, the same reason two PUTs to the
+  // same key never duplicate anything. A previously-deleted (tombstoned)
+  // copy is treated as "not present" and freely re-added, since that was
+  // a deliberate removal, not a duplicate worth blocking.
+  var localId = 'shared-' + shareId;
+  var existing = state.foodsById[localId];
+  if (existing && existing.deleted !== true) {
+    if (isHandoff) showShareHandoffBanner('You already added "' + existing.name + '" to your diary', null);
+    else { showDiaryPanel(); showStatus('You already added this recipe', false); }
+    return;
+  }
+  var recipe = {
+    id: localId,
+    name: snapshot.name,
+    type: 'recipe',
+    servings: snapshot.servings,
+    ingredients: snapshot.ingredients,
+    servingsCount: snapshot.servingsCount,
+    source: 'local',
+    updated: nowSec(),
+    deleted: false
+  };
+  dbBulkPutFoods([recipe], function () {
+    upsertStateFood(recipe);
+    gateOrAddToDiary(recipe, null, null, function () {
+      syncFoods();
+      syncAfterDiaryMutation();
+      if (isHandoff) showShareHandoffBanner('Added "' + recipe.name + '" to your diary! Open the app to view it.', null);
+      else { showDiaryPanel(); showStatus('Added ' + recipe.name, false); }
+    });
+  });
+}
+
+// Always re-fetches the shared snapshot fresh (never trusts anything
+// beyond the id itself) — mirrors kaios-shared-list's acceptShare()'s own
+// re-fetch-in-real-context principle.
+function importSharedRecipeFromUrl(shareId, isHandoff) {
+  xhrPostJson(GET_SHARED_RECIPE_URL, { id: shareId })
+    .then(function (res) {
+      if (res.status !== 200 || !res.data) {
+        if (isHandoff) showShareHandoffBanner('This shared recipe is no longer available', null);
+        else { showDiaryPanel(); showStatus('This shared recipe is no longer available', true); }
+        return;
+      }
+      importSharedRecipe(res.data, shareId, isHandoff);
+    })
+    .catch(function () {
+      if (isHandoff) showShareHandoffBanner('Could not load this shared recipe, please try again', null);
+      else { showDiaryPanel(); showStatus('Could not load this shared recipe, please try again', true); }
+    });
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
-applyCaffeineVisibility();
-applyAlcoholVisibility();
-setAuthDotState();
+if (isKaiosHandoffBrowser) {
+  // Deliberately skips the normal openDB()/sync bootstrap entirely — this
+  // is a one-shot "click to continue" screen, nothing else renders until
+  // the real app boots at the .localhost origin below.
+  var handoffHref = 'http://caloriecounter.localhost/index.html?share=' + encodeURIComponent(shareIdFromUrl) + '&handoff=1';
+  showShareHandoffBanner('Click here to add this recipe to your diary', handoffHref);
+  xhrPostJson(GET_SHARED_RECIPE_URL, { id: shareIdFromUrl }).then(function (res) {
+    if (res.status === 200 && res.data && res.data.name) {
+      showShareHandoffBanner('Click here to add the "' + res.data.name + '" recipe to your diary', handoffHref);
+    }
+    // A fetch failure here just keeps the generic banner text — the real
+    // fetch-and-import still happens once the banner is tapped and the
+    // real app boots at the .localhost origin, regardless.
+  }).catch(function () {});
+} else {
+  applyCaffeineVisibility();
+  applyAlcoholVisibility();
+  setAuthDotState();
 
-openDB(function () {
-  purgeOldTombstonesLocally(function () {});
-  syncData(
-    function onFileStart(index, total, fileEntry) {
-      showPanel('panel-loading');
-      var filename = fileEntry.url.replace(/^\//, '');
-      document.getElementById('loading-count').textContent = 'Loading ' + index + ' of ' + total + ' database files…';
-      document.getElementById('loading-filename').textContent = filename;
-      document.getElementById('loading-progress-fill').style.width = '0%';
-    },
-    function onFileProgress(fraction) {
-      var pct = fraction === null ? 100 : Math.round(fraction * 100);
-      document.getElementById('loading-progress-fill').style.width = pct + '%';
-    },
-    function onDone() {
-      dbGetAllFoods(function (foods) {
-        state.allFoods = foods;
-        state.foodsById = {};
-        foods.forEach(function (f) { state.foodsById[f.id] = f; });
-        dbGetAllUsageCounts(function (records) {
-          state.usageCounts = {};
-          records.forEach(function (r) { state.usageCounts[r.id] = r.count; });
-          dbGetAllLastServings(function (servingRecords) {
-            state.lastServings = {};
-            servingRecords.forEach(function (r) {
-              state.lastServings[r.id] = { servingName: r.servingName, quantity: r.quantity };
+  openDB(function () {
+    purgeOldTombstonesLocally(function () {});
+    syncData(
+      function onFileStart(index, total, fileEntry) {
+        showPanel('panel-loading');
+        var filename = fileEntry.url.replace(/^\//, '');
+        document.getElementById('loading-count').textContent = 'Loading ' + index + ' of ' + total + ' database files…';
+        document.getElementById('loading-filename').textContent = filename;
+        document.getElementById('loading-progress-fill').style.width = '0%';
+      },
+      function onFileProgress(fraction) {
+        var pct = fraction === null ? 100 : Math.round(fraction * 100);
+        document.getElementById('loading-progress-fill').style.width = pct + '%';
+      },
+      function onDone() {
+        dbGetAllFoods(function (foods) {
+          state.allFoods = foods;
+          state.foodsById = {};
+          foods.forEach(function (f) { state.foodsById[f.id] = f; });
+          dbGetAllUsageCounts(function (records) {
+            state.usageCounts = {};
+            records.forEach(function (r) { state.usageCounts[r.id] = r.count; });
+            dbGetAllLastServings(function (servingRecords) {
+              state.lastServings = {};
+              servingRecords.forEach(function (r) {
+                state.lastServings[r.id] = { servingName: r.servingName, quantity: r.quantity };
+              });
+              if (shareIdFromUrl) importSharedRecipeFromUrl(shareIdFromUrl, shareHandoff);
+              else showDiaryPanel();
+              if (isLoggedIn()) {
+                accountRefreshIfNeeded();
+                runFullSync();
+              }
             });
-            showDiaryPanel();
-            if (isLoggedIn()) {
-              accountRefreshIfNeeded();
-              runFullSync();
-            }
           });
         });
-      });
-    }
-  );
-});
+      }
+    );
+  });
+}

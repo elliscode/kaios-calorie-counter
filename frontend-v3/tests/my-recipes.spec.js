@@ -76,6 +76,8 @@ test('deleting a recipe removes it from the list and reports it deleted on the n
 
   await goToMyRecipes(page);
   await page.locator('.my-recipe-row').click();
+  await expect(page.locator('#panel-recipe-detail')).toHaveAttribute('active', 'true');
+  await page.locator('#sk-right').click(); // Options
   await expect(page.locator('#sheet')).toHaveAttribute('active', 'true');
   await page.locator('#sheet-ul .list-row').filter({ hasText: 'Delete' }).click();
 
@@ -106,6 +108,8 @@ test('Edit opens the same builder pre-filled, updates the recipe in place, and n
 
   await goToMyRecipes(page);
   await page.locator('.my-recipe-row').click();
+  await expect(page.locator('#panel-recipe-detail')).toHaveAttribute('active', 'true');
+  await page.locator('#sk-right').click(); // Options
   await expect(page.locator('#sheet')).toHaveAttribute('active', 'true');
   await page.locator('#sheet-ul .list-row').filter({ hasText: 'Edit' }).click();
 
@@ -158,6 +162,8 @@ test('Back while editing a recipe returns to My Recipes, not Search', async ({ p
 
   await goToMyRecipes(page);
   await page.locator('.my-recipe-row').click();
+  await expect(page.locator('#panel-recipe-detail')).toHaveAttribute('active', 'true');
+  await page.locator('#sk-right').click(); // Options
   await page.locator('#sheet-ul .list-row').filter({ hasText: 'Edit' }).click();
   await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
 

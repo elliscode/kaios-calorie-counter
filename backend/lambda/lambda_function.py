@@ -30,6 +30,7 @@ from calorie_api.account import (
 from calorie_api.sync import sync_foods_route, sync_diary_route, sync_preferences_route
 from calorie_api.upc import lookup_upc_route
 from calorie_api.search import search_route
+from calorie_api.recipes import share_recipe_route, get_shared_recipe_route
 
 
 def lambda_handler(event, context):
@@ -107,4 +108,8 @@ def route(event):
         return submit_food_route(event)
     if path_equals(event=event, method="POST", path="/submit-upc-mapping"):
         return submit_upc_mapping_route(event)
+    if path_equals(event=event, method="POST", path="/recipes/share"):
+        return share_recipe_route(event)
+    if path_equals(event=event, method="POST", path="/recipes/shared"):
+        return get_shared_recipe_route(event)
     return format_response(event=event, http_code=403, body={"message": "Forbidden"})

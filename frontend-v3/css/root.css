@@ -243,3 +243,32 @@ body.dark #sk-center {
 body.dark .hint {
   color: #8b8b93;
 }
+
+/* Shared-recipe handoff banner — a single full-viewport tap target, no
+   D-pad navigation involved at all (see the HTML comment above this
+   element in index.html for why). Sits above absolutely everything
+   (higher than #sheet/#sheet-overlay) since it deliberately replaces the
+   entire UI while shown. */
+#share-handoff-banner {
+  display: none;
+}
+
+#share-handoff-banner[active="true"] {
+  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+  background: #2E7D32;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+}
