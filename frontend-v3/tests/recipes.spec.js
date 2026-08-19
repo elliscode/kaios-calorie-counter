@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { mockDataHost, goToSearchFromDiary } = require('./helpers');
+const { mockDataHost, pressSoftKey, goToSearchFromDiary } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
   await mockDataHost(page);
@@ -128,19 +128,20 @@ test('Back from the ingredient-quantity picker returns to the builder with prior
   await expect(page.locator('.recipe-ingredient-row')).toHaveCount(1);
 });
 
-test('a recipe cannot be picked as its own ingredient (no nested recipes)', async ({ page }) => {
-  // Create a simple recipe first.
+test('a different recipe can be nested as an ingredient, baked as a frozen snapshot that a later edit to the source recipe does not change', async ({ page }) => {
+  // Base Recipe: Apple, Raw "1 medium" = 95 cal, servingsCount 1 -> bakes to 95 cal/serving.
   await goToSearchFromDiary(page);
   await page.fill('#input-search', 'zzz');
   await page.waitForTimeout(250);
   await page.locator('#panel-search .search-row.add-new-recipe').click();
   await page.fill('#input-recipe-name', 'Base Recipe');
-  await addIngredient(page, 'apple', 'Apple, Raw', 'g', 50);
+  await addIngredient(page, 'apple', 'Apple, Raw', '1 medium', 1);
   await page.fill('#input-recipe-servings-count', '1');
   await page.locator('#btn-recipe-submit').click();
   await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
 
-  // Now start a second recipe and search for the first — it must not appear.
+  // Second Recipe: 2 servings of Base Recipe as its one ingredient, its
+  // own servingsCount 1 -> bakes to 95*2 = 190 cal/serving.
   await goToSearchFromDiary(page);
   await page.fill('#input-search', 'zzz');
   await page.waitForTimeout(250);
@@ -149,8 +150,84 @@ test('a recipe cannot be picked as its own ingredient (no nested recipes)', asyn
   await page.locator('#btn-recipe-add-ingredient').click();
   await page.fill('#input-search', 'Base Recipe');
   await page.waitForTimeout(250);
+  var baseRecipeRow = page.locator('#panel-search .search-row', { hasText: 'Base Recipe' });
+  await expect(baseRecipeRow).toBeVisible();
+  await expect(baseRecipeRow.locator('.recipe-tag')).toHaveText('Recipe');
+  await baseRecipeRow.click();
+  await expect(page.locator('#servings-food-name')).toHaveText('Base Recipe');
+  await page.fill('#input-serving-qty', '2');
+  await page.locator('#sk-center').click();
+  await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+  await page.fill('#input-recipe-servings-count', '1');
+  await page.locator('#btn-recipe-submit').click();
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+  await expect(page.locator('.food-row', { hasText: 'Second Recipe' }).locator('.food-row-calories')).toHaveText('190');
+
+  // Editing Base Recipe afterward must not retroactively change Second
+  // Recipe's already-baked totals — it was a frozen snapshot at pick time.
+  var secondRecipeCaloriesBefore = await page.evaluate(function () {
+    return new Promise(function (resolve) {
+      window.dbGetAllFoods(function (foods) {
+        resolve(foods.filter(function (f) { return f.name === 'Second Recipe'; })[0].servings[0].calories);
+      });
+    });
+  });
+  expect(secondRecipeCaloriesBefore).toBe(190);
+
+  await pressSoftKey(page, 'SoftRight'); // Diary -> Options
+  await page.locator('#opt-my-recipes').click();
+  await page.locator('.my-recipe-row', { hasText: 'Base Recipe' }).click();
+  await expect(page.locator('#panel-recipe-detail')).toHaveAttribute('active', 'true');
+  await page.locator('#sk-right').click(); // Options
+  await page.locator('#sheet-ul .list-row').filter({ hasText: 'Edit' }).click();
+  await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+  await page.fill('#input-recipe-servings-count', '2'); // was 1 -> now bakes to 95/2 = 47.5 cal/serving
+  await page.locator('#btn-recipe-submit').click();
+
+  var secondRecipeCaloriesAfter = await page.evaluate(function () {
+    return new Promise(function (resolve) {
+      window.dbGetAllFoods(function (foods) {
+        resolve(foods.filter(function (f) { return f.name === 'Second Recipe'; })[0].servings[0].calories);
+      });
+    });
+  });
+  expect(secondRecipeCaloriesAfter).toBe(190); // unchanged
+});
+
+test('a recipe cannot be picked as its own ingredient while being edited, but other recipes still can be', async ({ page }) => {
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'zzz');
+  await page.waitForTimeout(250);
+  await page.locator('#panel-search .search-row.add-new-recipe').click();
+  await page.fill('#input-recipe-name', 'Other Recipe');
+  await addIngredient(page, 'apple', 'Apple, Raw', 'g', 50);
+  await page.fill('#input-recipe-servings-count', '1');
+  await page.locator('#btn-recipe-submit').click();
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  await goToSearchFromDiary(page);
+  await page.fill('#input-search', 'zzz');
+  await page.waitForTimeout(250);
+  await page.locator('#panel-search .search-row.add-new-recipe').click();
+  await page.fill('#input-recipe-name', 'Self Ref Recipe');
+  await addIngredient(page, 'apple', 'Apple, Raw', 'g', 50);
+  await page.fill('#input-recipe-servings-count', '1');
+  await page.locator('#btn-recipe-submit').click();
+  await expect(page.locator('#panel-diary')).toHaveAttribute('active', 'true');
+
+  await pressSoftKey(page, 'SoftRight'); // Diary -> Options
+  await page.locator('#opt-my-recipes').click();
+  await page.locator('.my-recipe-row', { hasText: 'Self Ref Recipe' }).click();
+  await page.locator('#sk-right').click(); // Options
+  await page.locator('#sheet-ul .list-row').filter({ hasText: 'Edit' }).click();
+  await expect(page.locator('#panel-recipe-builder')).toHaveAttribute('active', 'true');
+
+  await page.locator('#btn-recipe-add-ingredient').click();
+  await page.fill('#input-search', 'Recipe');
+  await page.waitForTimeout(250);
   var plainResults = page.locator('#panel-search .search-row:not(.add-new):not(.add-new-recipe):not(.add-new-guesstimate)');
-  await expect(plainResults).toHaveCount(0);
+  await expect(plainResults.filter({ hasText: 'Self Ref Recipe' })).toHaveCount(0); // itself: excluded
+  await expect(plainResults.filter({ hasText: 'Other Recipe' })).toHaveCount(1); // a different recipe: still allowed
 });
 
 test('required fields: recipe name, at least one ingredient, and a positive servings count', async ({ page }) => {

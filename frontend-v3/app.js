@@ -2300,9 +2300,11 @@ function renderSearchResults(query) {
   var pickingIngredient = state.searchMode === 'recipe-ingredient';
   var results = queryTokens.length ? state.allFoods.filter(function (f) {
     if (f.deleted === true) return false;
-    // A recipe can't be an ingredient of another recipe — keeps nutrition
-    // baked-in-once at each level, no chained/nested recompute chains.
-    if (pickingIngredient && f.type === 'recipe') return false;
+    // A recipe can be nested inside another as a frozen nutrition snapshot
+    // (see addServingAsRecipeIngredient) — but not inside itself, which
+    // would just be a snapshot of an older saved version of the recipe
+    // currently being edited, not anything meaningfully new.
+    if (pickingIngredient && state.recipeBuilder && f.id === state.recipeBuilder.editingId) return false;
     return matchesSearchTokens(f.name, queryTokens);
   }).sort(function (a, b) {
     var scoreA = searchMatchScore(a.name, queryTokens);
@@ -3284,19 +3286,24 @@ function addServingAsRecipeIngredient() {
     return;
   }
   var food = state.editingFood;
+  var snapshot = !food.id || food.type === 'recipe';
   var ingredient = {
-    foodId: food.id,
+    foodId: snapshot ? null : food.id,
     foodName: food.name,
     servingName: baseline.name,
     quantity: qty
   };
-  // A catalog pick (selectRemoteResultForRecipeIngredient) has no backing
-  // foods record — baseline here is the exact (unscaled) serving it was
-  // picked at (currentServingBaseline's state.editingFood branch), baked
-  // directly onto the ingredient so computeIngredientNutrients can rescale
-  // off it later without a state.foodsById lookup.
-  if (!food.id) {
-    ingredient.upc = food.upc;
+  // A catalog pick (selectRemoteResultForRecipeIngredient) or a nested
+  // recipe both have nothing worth live-linking to — baseline here is the
+  // exact (unscaled) serving it was picked at (currentServingBaseline's
+  // state.editingFood branch), baked directly onto the ingredient so
+  // computeIngredientNutrients can rescale off it later without a
+  // state.foodsById lookup. For a nested recipe this is deliberate, not
+  // just incidental: a later edit to the source recipe never propagates,
+  // which is also what keeps this cycle-safe — nothing here ever
+  // recomputes through a live chain of recipes.
+  if (snapshot) {
+    if (food.upc) ingredient.upc = food.upc;
     ingredient.referenceServing = baseline;
   }
   state.recipeBuilder.ingredients.push(ingredient);
